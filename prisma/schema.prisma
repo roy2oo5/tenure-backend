@@ -1,0 +1,49 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      Role     @default(USER)
+  profile   Profile?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Profile {
+  id           String    @id @default(uuid())
+  userId       String    @unique @map("user_id")
+  tenureId     String    @unique @map("tenure_id")
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profilePhoto String?   @map("profile_photo")
+  fullName     String    @map("full_name")
+  dob          DateTime? @map("dob")
+  gender       String?
+  country      String
+  state        String
+  district     String
+  pinCode      String    @map("pin_code")
+  languages    String[]
+  categories   String[]
+  hourlyRate   Float?    @map("hourly_rate")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("profiles")
+}
+

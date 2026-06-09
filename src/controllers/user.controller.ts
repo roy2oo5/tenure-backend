@@ -1,0 +1,87 @@
+import { Request, Response, NextFunction } from 'express';
+import { UserService } from '../services/user.service';
+import { AppError } from '../utils/app-error';
+
+export class UserController {
+  public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, password, name, role } = req.body;
+      const result = await UserService.register({ email, password, name, role });
+      res.status(201).json({
+        status: 'success',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async login(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email, password } = req.body;
+      const result = await UserService.login({ email, password });
+      res.status(200).json({
+        status: 'success',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async getMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const user = await UserService.getProfile(req.user.id);
+      res.status(200).json({
+        status: 'success',
+        data: { user },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async getAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const users = await UserService.getAllUsers();
+      res.status(200).json({
+        status: 'success',
+        results: users.length,
+        data: { users },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async updateMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const updatedUser = await UserService.updateUser(req.user.id, req.body);
+      res.status(200).json({
+        status: 'success',
+        data: { user: updatedUser },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      await UserService.deleteUser(id);
+      res.status(204).json({
+        status: 'success',
+        data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+}
