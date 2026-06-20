@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import userRoutes from './user.routes';
+import requestRoutes from './request.routes';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.get('/health', (req, res) => {
 
 // Register sub-routers
 router.use('/users', userRoutes);
+router.use('/requests', requestRoutes);
 
 export default router;

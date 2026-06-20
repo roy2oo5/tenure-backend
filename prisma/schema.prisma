@@ -13,15 +13,17 @@ enum Role {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  phone     String?  @unique @map("phone")
-  password  String
-  name      String?
-  role      Role     @default(USER)
-  profile   Profile?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id               String    @id @default(uuid())
+  email            String    @unique
+  phone            String?   @unique @map("phone")
+  password         String
+  name             String?
+  role             Role      @default(USER)
+  profile          Profile?
+  sentRequests     Request[] @relation("SentRequests")
+  receivedRequests Request[] @relation("ReceivedRequests")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   @@map("users")
 }
@@ -61,5 +63,32 @@ model Profile {
 
   @@index([district])
   @@map("profiles")
+}
+
+enum RequestStatus {
+  PENDING
+  CONFIRMED
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
+model Request {
+  id            String        @id @default(uuid())
+  senderId      String        @map("sender_id")
+  receiverId    String        @map("receiver_id")
+  sender        User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver      User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+  categoryId    String        @map("category_id")
+  categoryLabel String        @map("category_label")
+  meetLocation  String        @map("meet_location")
+  fromDateTime  DateTime      @map("from_date_time")
+  toDateTime    DateTime      @map("to_date_time")
+  message       String?       @default("")
+  status        RequestStatus @default(PENDING)
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  @@map("requests")
 }
 
