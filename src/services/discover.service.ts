@@ -27,6 +27,10 @@ export type DiscoverMateResult = {
   languages: string[];
   about: string | null;
   aadhaarVerified: boolean;
+  instagram: string | null;
+  facebook: string | null;
+  youtube: string | null;
+  website: string | null;
 };
 
 const PLACEHOLDER_NAME = /^user\s+\d{10}$/i;
@@ -143,6 +147,10 @@ function toDiscoverMate(profile: Profile): DiscoverMateResult {
     languages: profile.languages,
     about: profile.about,
     aadhaarVerified: profile.aadhaarVerified,
+    instagram: profile.instagram,
+    facebook: profile.facebook,
+    youtube: profile.youtube,
+    website: profile.website,
   };
 }
 
