@@ -10,9 +10,17 @@ export const validate = (schema: AnyZodObject) => {
         query: req.query,
         params: req.params,
       });
-      req.body = parsed.body;
-      req.query = parsed.query as any;
-      req.params = parsed.params as any;
+      // Only overwrite what the schema actually validated; otherwise a schema
+      // that omits (e.g.) `params` would wipe req.params with `undefined`.
+      if (parsed.body !== undefined) {
+        req.body = parsed.body;
+      }
+      if (parsed.query !== undefined) {
+        req.query = parsed.query as any;
+      }
+      if (parsed.params !== undefined) {
+        req.params = parsed.params as any;
+      }
       next();
     } catch (error) {
       if (error instanceof ZodError) {
