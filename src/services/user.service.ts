@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import jwt, { type SignOptions } from 'jsonwebtoken';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
@@ -18,9 +18,21 @@ const formatUser = (user: User): UserWithoutPassword => {
 };
 
 const signToken = (id: string, email: string, role: Role): string => {
-  return jwt.sign({ id, email, role }, env.JWT_SECRET, {
-    expiresIn: env.JWT_EXPIRES_IN,
-  });
+  const options: SignOptions = {
+    expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
+  };
+  return jwt.sign({ id, email, role }, env.JWT_SECRET, options);
+};
+
+const normalizePhone = (phone: string): string => {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length !== 10) {
+    throw new AppError('Please provide a valid 10-digit phone number', 400);
+  }
+  if (!['6', '7', '8', '9'].includes(digits[0])) {
+    throw new AppError('Please provide a valid Indian mobile number', 400);
+  }
+  return digits;
 };
 
 export class UserService {
@@ -33,12 +45,63 @@ export class UserService {
       throw new AppError('Email address is already registered', 409);
     }
 
+    if (data.phone) {
+      const phone = normalizePhone(data.phone as string);
+      const existingPhoneUser = await prisma.user.findUnique({
+        where: { phone },
+      });
+      if (existingPhoneUser) {
+        throw new AppError('Phone number is already registered', 409);
+      }
+      data.phone = phone;
+    }
+
     const hashedPassword = await bcrypt.hash(data.password, 12);
 
     const newUser = await prisma.user.create({
       data: {
         ...data,
         password: hashedPassword,
+      },
+    });
+
+    const token = signToken(newUser.id, newUser.email, newUser.role);
+
+    return {
+      user: formatUser(newUser),
+      token,
+    };
+  }
+
+  /**
+   * Find existing user by phone or create a new account.
+   * Used by the mobile app so logout + re-login restores the same user/profile.
+   */
+  public static async authenticateByPhone(phoneInput: string): Promise<AuthResponse> {
+    const phone = normalizePhone(phoneInput);
+
+    const existingUser = await prisma.user.findUnique({
+      where: { phone },
+    });
+
+    if (existingUser) {
+      const token = signToken(existingUser.id, existingUser.email, existingUser.role);
+      return {
+        user: formatUser(existingUser),
+        token,
+      };
+    }
+
+    const email = `phone_${phone}@tenure.app`;
+    const password = `pass_${phone}`;
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const newUser = await prisma.user.create({
+      data: {
+        phone,
+        email,
+        password: hashedPassword,
+        name: `User ${phone}`,
       },
     });
 

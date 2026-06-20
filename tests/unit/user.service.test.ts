@@ -41,6 +41,7 @@ describe('UserService', () => {
       const mockDbUser = {
         id: 'user-uuid-123',
         email: 'test@example.com',
+        phone: null,
         password: 'hashedPassword123',
         name: 'Test User',
         role: Role.USER,
@@ -76,6 +77,52 @@ describe('UserService', () => {
       (prisma.user.findUnique as any).mockResolvedValue(existingUser);
 
       await expect(UserService.register(mockUserData)).rejects.toThrow('Email address is already registered');
+    });
+  });
+
+  describe('authenticateByPhone', () => {
+    it('should return token for an existing user matched by phone', async () => {
+      const existingUser = {
+        id: 'user-uuid-123',
+        email: 'phone_9876543210@tenure.app',
+        phone: '9876543210',
+        password: 'hashedPassword123',
+        name: 'User 9876543210',
+        role: Role.USER,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(existingUser);
+
+      const result = await UserService.authenticateByPhone('9876543210');
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { phone: '9876543210' } });
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(result.token).toBe('mocked-jwt-token');
+      expect(result.user.phone).toBe('9876543210');
+    });
+
+    it('should create a new user when phone is not registered', async () => {
+      const newUser = {
+        id: 'user-uuid-456',
+        email: 'phone_9876543210@tenure.app',
+        phone: '9876543210',
+        password: 'hashedPassword123',
+        name: 'User 9876543210',
+        role: Role.USER,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(null);
+      (prisma.user.create as any).mockResolvedValue(newUser);
+
+      const result = await UserService.authenticateByPhone('9876543210');
+
+      expect(prisma.user.create).toHaveBeenCalled();
+      expect(result.user.phone).toBe('9876543210');
+      expect(result.token).toBe('mocked-jwt-token');
     });
   });
 });

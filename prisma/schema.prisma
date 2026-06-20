@@ -15,6 +15,7 @@ enum Role {
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
+  phone     String?  @unique @map("phone")
   password  String
   name      String?
   role      Role     @default(USER)
@@ -32,7 +33,7 @@ model Profile {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   profilePhoto String?   @map("profile_photo")
   fullName     String    @map("full_name")
-  dob          DateTime? @map("dob")
+  dob          DateTime? @map("dob") @db.Date
   gender       String?
   country      String
   state        String
@@ -41,9 +42,24 @@ model Profile {
   languages    String[]
   categories   String[]
   hourlyRate   Float?    @map("hourly_rate")
+  about        String?
+  vibes        String[]  @default([])
+  professions  String[]  @default([])
+  vehicles     String[]  @default([])
+  interests    String[]  @default([])
+  availableDays      String[] @default([]) @map("available_days")
+  availableTimeRange String?  @map("available_time_range")
+  bestTime           String?  @map("best_time")
+  comfortPreferredPlaces String? @map("comfort_preferred_places")
+  comfortTravelRange     String? @map("comfort_travel_range")
+  comfortWith            String? @map("comfort_with")
+  comfortNotWith         String? @map("comfort_not_with")
+  aadhaarVerified  Boolean @default(false) @map("aadhaar_verified")
+  aadhaarMasked    String? @map("aadhaar_masked")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
+  @@index([district])
   @@map("profiles")
 }
 

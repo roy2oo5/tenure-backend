@@ -5,8 +5,8 @@ import { AppError } from '../utils/app-error';
 export class UserController {
   public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { email, password, name, role } = req.body;
-      const result = await UserService.register({ email, password, name, role });
+      const { email, password, name, role, phone } = req.body;
+      const result = await UserService.register({ email, password, name, role, phone });
       res.status(201).json({
         status: 'success',
         data: result,
@@ -20,6 +20,19 @@ export class UserController {
     try {
       const { email, password } = req.body;
       const result = await UserService.login({ email, password });
+      res.status(200).json({
+        status: 'success',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async phoneAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { phone } = req.body;
+      const result = await UserService.authenticateByPhone(phone);
       res.status(200).json({
         status: 'success',
         data: result,

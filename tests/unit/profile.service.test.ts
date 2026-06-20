@@ -14,6 +14,23 @@ vi.mock('@/utils/tenure-id', () => ({
   generateUniqueTenureId: vi.fn().mockResolvedValue('AB123'),
 }));
 
+const extendedProfileDefaults = {
+  about: null,
+  vibes: [],
+  professions: [],
+  vehicles: [],
+  interests: [],
+  availableDays: [],
+  availableTimeRange: null,
+  bestTime: null,
+  comfortPreferredPlaces: null,
+  comfortTravelRange: null,
+  comfortWith: null,
+  comfortNotWith: null,
+  aadhaarVerified: false,
+  aadhaarMasked: null,
+};
+
 describe('ProfileService', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -59,6 +76,7 @@ describe('ProfileService', () => {
           ...mockProfileData,
           categories: ['Travel Mate'],
           hourlyRate: 25.0,
+          ...extendedProfileDefaults,
         },
         create: {
           userId: 'user-id-123',
@@ -66,6 +84,7 @@ describe('ProfileService', () => {
           ...mockProfileData,
           categories: ['Travel Mate'],
           hourlyRate: 25.0,
+          ...extendedProfileDefaults,
         },
       });
       expect(result).toEqual(mockResponse);
@@ -90,6 +109,7 @@ describe('ProfileService', () => {
         ...mockProfileData,
         categories: [],
         hourlyRate: null,
+        ...extendedProfileDefaults,
       };
 
       const mockResponse = {

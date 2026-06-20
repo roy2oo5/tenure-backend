@@ -1,10 +1,15 @@
 import { Router } from 'express';
 import { UserController } from '../controllers/user.controller';
 import { ProfileController } from '../controllers/profile.controller';
+import { DiscoverController } from '../controllers/discover.controller';
 import { validate } from '../middlewares/validation.middleware';
 import { protect, restrictTo } from '../middlewares/auth.middleware';
-import { registerSchema, loginSchema, updateUserSchema } from '../validations/user.validation';
+import { registerSchema, loginSchema, updateUserSchema, phoneAuthSchema } from '../validations/user.validation';
 import { createProfileSchema } from '../validations/profile.validation';
+import {
+  discoverSearchSchema,
+  mateProfileParamsSchema,
+} from '../validations/discover.validation';
 import { Role } from '@prisma/client';
 
 const router = Router();
@@ -27,6 +32,9 @@ const router = Router();
  *         name:
  *           type: string
  *           example: "Jane Doe"
+ *         phone:
+ *           type: string
+ *           example: "9876543210"
  *         role:
  *           type: string
  *           enum: [USER, ADMIN]
@@ -199,6 +207,32 @@ router.post('/register', validate(registerSchema), UserController.register);
  *         description: Incorrect email or password.
  */
 router.post('/login', validate(loginSchema), UserController.login);
+
+/**
+ * @swagger
+ * /users/phone-auth:
+ *   post:
+ *     summary: Log in or register using a phone number
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - phone
+ *             properties:
+ *               phone:
+ *                 type: string
+ *                 example: "9876543210"
+ *     responses:
+ *       200:
+ *         description: Existing user logged in or new user created. Returns user and JWT.
+ *       400:
+ *         description: Invalid phone number.
+ */
+router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
 
 /**
  * @swagger
@@ -389,6 +423,19 @@ router.patch('/update-me', protect, validate(updateUserSchema), UserController.u
  */
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
+
+router.get(
+  '/discover',
+  protect,
+  validate(discoverSearchSchema),
+  DiscoverController.search,
+);
+router.get(
+  '/mates/:userId',
+  protect,
+  validate(mateProfileParamsSchema),
+  DiscoverController.getMateProfile,
+);
 
 /**
  * @swagger
