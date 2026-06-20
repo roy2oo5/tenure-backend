@@ -19,6 +19,7 @@ model User {
   password         String
   name             String?
   role             Role      @default(USER)
+  isActive         Boolean   @default(true) @map("is_active")
   profile          Profile?
   sentRequests     Request[] @relation("SentRequests")
   receivedRequests Request[] @relation("ReceivedRequests")
@@ -58,8 +59,13 @@ model Profile {
   comfortNotWith         String? @map("comfort_not_with")
   aadhaarVerified  Boolean @default(false) @map("aadhaar_verified")
   aadhaarMasked    String? @map("aadhaar_masked")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  gallery          String[] @default([])
+  instagram        String?
+  facebook         String?
+  youtube          String?
+  website          String?
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   @@index([district])
   @@map("profiles")

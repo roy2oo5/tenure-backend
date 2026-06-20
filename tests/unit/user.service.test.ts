@@ -8,6 +8,8 @@ vi.mock('@/config/database', () => ({
     user: {
       findUnique: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
     },
   },
 }));
@@ -123,6 +125,93 @@ describe('UserService', () => {
       expect(prisma.user.create).toHaveBeenCalled();
       expect(result.user.phone).toBe('9876543210');
       expect(result.token).toBe('mocked-jwt-token');
+    });
+
+    it('should reactivate a deactivated user account by setting isActive to true', async () => {
+      const deactivatedUser = {
+        id: 'user-uuid-123',
+        email: 'phone_9876543210@tenure.app',
+        phone: '9876543210',
+        password: 'hashedPassword123',
+        name: 'User 9876543210',
+        role: Role.USER,
+        isActive: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(deactivatedUser);
+      (prisma.user.update as any).mockResolvedValue({
+        ...deactivatedUser,
+        isActive: true,
+      });
+
+      const result = await UserService.authenticateByPhone('9876543210');
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: deactivatedUser.id },
+        data: { isActive: true },
+      });
+      expect(result.user.isActive).toBe(true);
+    });
+  });
+
+  describe('login', () => {
+    it('should login an active user successfully', async () => {
+      const activeUser = {
+        id: 'user-uuid-123',
+        email: 'test@example.com',
+        password: 'hashedPassword123',
+        role: Role.USER,
+        isActive: true,
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(activeUser);
+      (bcrypt.compare as any).mockResolvedValue(true);
+
+      const result = await UserService.login({ email: 'test@example.com', password: 'password123' });
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'test@example.com' } });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(result.token).toBe('mocked-jwt-token');
+      expect(result.user.isActive).toBe(true);
+    });
+
+    it('should reactivate a deactivated user on login', async () => {
+      const deactivatedUser = {
+        id: 'user-uuid-123',
+        email: 'test@example.com',
+        password: 'hashedPassword123',
+        role: Role.USER,
+        isActive: false,
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(deactivatedUser);
+      (bcrypt.compare as any).mockResolvedValue(true);
+      (prisma.user.update as any).mockResolvedValue({
+        ...deactivatedUser,
+        isActive: true,
+      });
+
+      const result = await UserService.login({ email: 'test@example.com', password: 'password123' });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: deactivatedUser.id },
+        data: { isActive: true },
+      });
+      expect(result.user.isActive).toBe(true);
+    });
+  });
+
+  describe('deleteUser', () => {
+    it('should permanently delete user account', async () => {
+      (prisma.user.delete as any).mockResolvedValue({});
+
+      await UserService.deleteUser('user-uuid-123');
+
+      expect(prisma.user.delete).toHaveBeenCalledWith({
+        where: { id: 'user-uuid-123' },
+      });
     });
   });
 });

@@ -29,6 +29,11 @@ const extendedProfileDefaults = {
   comfortNotWith: null,
   aadhaarVerified: false,
   aadhaarMasked: null,
+  gallery: [],
+  instagram: null,
+  facebook: null,
+  youtube: null,
+  website: null,
 };
 
 describe('ProfileService', () => {

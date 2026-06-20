@@ -155,6 +155,9 @@ export class DiscoverService {
       userId: { not: currentUserId },
       categories: { isEmpty: false },
       profilePhoto: { not: null },
+      user: {
+        isActive: true,
+      },
     };
 
     if (input.district && input.district !== 'all') {
@@ -188,9 +191,10 @@ export class DiscoverService {
 
     const profile = await prisma.profile.findUnique({
       where: { userId: targetUserId },
+      include: { user: true },
     });
 
-    if (!profile || !isDiscoverableProfile(profile)) {
+    if (!profile || !profile.user?.isActive || !isDiscoverableProfile(profile)) {
       return null;
     }
 

@@ -97,4 +97,34 @@ export class UserController {
       next(error);
     }
   }
+
+  public static async deactivateMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      await UserService.updateUser(req.user.id, { isActive: false });
+      res.status(200).json({
+        status: 'success',
+        data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async deleteMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      await UserService.deleteUser(req.user.id);
+      res.status(204).json({
+        status: 'success',
+        data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

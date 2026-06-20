@@ -307,6 +307,8 @@ router.get('/me', protect, UserController.getMe);
  *         description: Not authenticated.
  */
 router.patch('/update-me', protect, validate(updateUserSchema), UserController.updateMe);
+router.patch('/deactivate-me', protect, UserController.deactivateMe);
+router.delete('/delete-me', protect, UserController.deleteMe);
 
 /**
  * @swagger

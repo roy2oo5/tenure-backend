@@ -85,6 +85,13 @@ export class UserService {
     });
 
     if (existingUser) {
+      if (!existingUser.isActive) {
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: { isActive: true },
+        });
+        existingUser.isActive = true;
+      }
       const token = signToken(existingUser.id, existingUser.email, existingUser.role);
       return {
         user: formatUser(existingUser),
@@ -124,6 +131,14 @@ export class UserService {
 
     if (!user || !(await bcrypt.compare(data.password as string, user.password))) {
       throw new AppError('Incorrect email or password', 401);
+    }
+
+    if (!user.isActive) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { isActive: true },
+      });
+      user.isActive = true;
     }
 
     const token = signToken(user.id, user.email, user.role);

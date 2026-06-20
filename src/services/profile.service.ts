@@ -28,6 +28,11 @@ export type ProfileUpsertInput = {
   comfortNotWith?: string | null;
   aadhaarVerified?: boolean;
   aadhaarMasked?: string | null;
+  gallery?: string[] | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  youtube?: string | null;
+  website?: string | null;
 };
 
 export class ProfileService {
@@ -64,6 +69,11 @@ export class ProfileService {
       comfortNotWith: data.comfortNotWith ?? null,
       aadhaarVerified: data.aadhaarVerified ?? false,
       aadhaarMasked: data.aadhaarMasked ?? null,
+      gallery: data.gallery ?? [],
+      instagram: data.instagram ?? null,
+      facebook: data.facebook ?? null,
+      youtube: data.youtube ?? null,
+      website: data.website ?? null,
     };
 
     const existingProfile = await prisma.profile.findUnique({
