@@ -2,6 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { SessionStatus, RequestStatus } from '@prisma/client';
 import { sendToUser } from './websocket.service';
+import { NotificationService } from './notification.service';
 
 export type MappedSession = {
   id: string;
@@ -333,6 +334,22 @@ export class SessionService {
     const mappedSender = await mapSession(updated, updated.senderId);
     const mappedReceiver = await mapSession(updated, updated.receiverId);
     broadcastSessionUpdate(updated, mappedSender, mappedReceiver);
+
+    // Create notifications for billing
+    try {
+      await NotificationService.createNotification(
+        updated.senderId,
+        'payment_sent',
+        `you paid ₹${mappedSender.billingAmount} to ${mappedSender.partnerName}`
+      );
+      await NotificationService.createNotification(
+        updated.receiverId,
+        'payment_received',
+        `you received ₹${mappedReceiver.billingAmount} from ${mappedReceiver.partnerName}`
+      );
+    } catch (notifErr: any) {
+      console.error('Failed to create session billing notifications:', notifErr.message);
+    }
 
     return mapSession(updated, userId);
   }

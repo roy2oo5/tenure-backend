@@ -2,6 +2,7 @@ import { Router } from 'express';
 import userRoutes from './user.routes';
 import requestRoutes from './request.routes';
 import uploadRoutes from './upload.routes';
+import notificationRoutes from './notification.routes';
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.get('/health', (req, res) => {
 router.use('/users', userRoutes);
 router.use('/requests', requestRoutes);
 router.use('/upload', uploadRoutes);
+router.use('/notifications', notificationRoutes);
 
 export default router;

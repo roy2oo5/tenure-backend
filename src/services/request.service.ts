@@ -1,6 +1,7 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { RequestStatus } from '@prisma/client';
+import { NotificationService } from './notification.service';
 
 export type CreateRequestInput = {
   receiverId: string;
@@ -219,6 +220,30 @@ export class RequestService {
 
     const isSender = updatedRequest.senderId === userId;
     const partner = isSender ? updatedRequest.receiver : updatedRequest.sender;
+
+    const senderName = updatedRequest.sender.profile?.fullName ?? updatedRequest.sender.name ?? 'Anonymous';
+    const receiverName = updatedRequest.receiver.profile?.fullName ?? updatedRequest.receiver.name ?? 'Anonymous';
+
+    // Create notifications based on request actions
+    if (status === 'confirmed') {
+      await NotificationService.createNotification(
+        updatedRequest.senderId,
+        'request_accepted',
+        `${receiverName} accepted your request`
+      );
+    } else if (status === 'cancelled') {
+      await NotificationService.createNotification(
+        updatedRequest.receiverId,
+        'meet_canceled',
+        `${senderName} cancelled your meet`
+      );
+    } else if (status === 'declined') {
+      await NotificationService.createNotification(
+        updatedRequest.senderId,
+        'meet_canceled',
+        `${receiverName} declined your request`
+      );
+    }
 
     return {
       id: updatedRequest.id,

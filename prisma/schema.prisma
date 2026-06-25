@@ -25,6 +25,7 @@ model User {
   receivedRequests Request[] @relation("ReceivedRequests")
   sentMessages     Message[] @relation("SentMessages")
   receivedMessages Message[] @relation("ReceivedMessages")
+  notifications    Notification[]
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
@@ -146,5 +147,18 @@ model Session {
 
   @@map("sessions")
 }
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String   @map("kind")
+  message   String   @map("message")
+  read      Boolean  @default(false) @map("read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("notifications")
+}
+
 
 

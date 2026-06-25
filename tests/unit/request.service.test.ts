@@ -16,6 +16,9 @@ vi.mock('@/config/database', () => ({
     message: {
       findMany: vi.fn(),
     },
+    notification: {
+      create: vi.fn(),
+    },
   },
 }));
 

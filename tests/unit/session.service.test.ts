@@ -20,6 +20,9 @@ vi.mock('@/config/database', () => ({
     profile: {
       findFirst: vi.fn(),
     },
+    notification: {
+      create: vi.fn(),
+    },
   },
 }));
 
