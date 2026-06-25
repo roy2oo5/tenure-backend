@@ -23,6 +23,8 @@ model User {
   profile          Profile?
   sentRequests     Request[] @relation("SentRequests")
   receivedRequests Request[] @relation("ReceivedRequests")
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
@@ -92,9 +94,28 @@ model Request {
   toDateTime    DateTime      @map("to_date_time")
   message       String?       @default("")
   status        RequestStatus @default(PENDING)
+  messages      Message[]     @relation("RequestMessages")
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
 
   @@map("requests")
+}
+
+model Message {
+  id             String    @id @default(uuid())
+  requestId      String    @map("request_id")
+  senderId       String    @map("sender_id")
+  receiverId     String    @map("receiver_id")
+  content        String
+  type           String    @default("text") // 'text', 'image', 'voice'
+  mediaUrl       String?   @map("media_url")
+  voiceDuration  Int?      @map("voice_duration")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  request        Request   @relation("RequestMessages", fields: [requestId], references: [id], onDelete: Cascade)
+  sender         User      @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver       User      @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
 }
 

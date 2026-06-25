@@ -2,6 +2,8 @@ import app from './app';
 import { env } from './config/env';
 import { connectDB, prisma } from './config/database';
 import { logger } from './utils/logger';
+import { initWebSocket } from './services/websocket.service';
+
 
 // Standard Uncaught Exception handler
 process.on('uncaughtException', (err) => {
@@ -23,6 +25,8 @@ const boot = async () => {
   server = app.listen(env.PORT, () => {
     logger.info(`🚀 Server listening on port ${env.PORT} in ${env.NODE_ENV} mode`);
   });
+  initWebSocket(server);
+
 };
 
 boot();

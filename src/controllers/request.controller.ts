@@ -49,4 +49,21 @@ export class RequestController {
       next(error);
     }
   }
+
+  public static async listMessages(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const { id } = req.params;
+      const messages = await RequestService.getRequestMessages(req.user.id, id);
+      res.status(200).json({
+        status: 'success',
+        data: { messages },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

@@ -12,5 +12,7 @@ router.use(protect);
 router.post('/', validate(createRequestSchema), RequestController.create);
 router.get('/', RequestController.list);
 router.patch('/:id/status', validate(updateRequestStatusSchema), RequestController.updateStatus);
+router.get('/:id/messages', RequestController.listMessages);
+
 
 export default router;

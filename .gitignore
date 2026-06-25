@@ -35,3 +35,7 @@ coverage/
 # Prisma temporary files
 /prisma/sqlite.db
 /prisma/sqlite.db-journal
+
+# Pending works documentation
+pending_works.md
+

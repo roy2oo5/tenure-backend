@@ -1,0 +1,146 @@
+import { IncomingMessage, Server as HttpServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import jwt from 'jsonwebtoken';
+import url from 'url';
+import { env } from '../config/env';
+import { prisma } from '../config/database';
+import { logger } from '../utils/logger';
+
+// Store active connections: map of userId -> WebSocket
+const connections = new Map<string, WebSocket>();
+
+export function initWebSocket(server: HttpServer) {
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (request, socket, head) => {
+    const parsed = url.parse(request.url || '');
+    const pathname = parsed.pathname;
+
+    if (pathname === '/chat' || pathname === '/chat/') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', async (ws: WebSocket, request: IncomingMessage) => {
+    try {
+      const parsedUrl = url.parse(request.url || '', true);
+      const token = parsedUrl.query.token as string;
+      const requestId = parsedUrl.query.requestId as string;
+
+      if (!token || !requestId) {
+        ws.send(JSON.stringify({ error: 'Missing token or requestId' }));
+        ws.close(4001, 'Unauthorized');
+        return;
+      }
+
+      // Verify JWT
+      let decoded: any;
+      try {
+        decoded = jwt.verify(token, env.JWT_SECRET);
+      } catch (err) {
+        ws.send(JSON.stringify({ error: 'Invalid authentication token' }));
+        ws.close(4002, 'Unauthorized');
+        return;
+      }
+
+      const userId = decoded.id;
+      if (!userId) {
+        ws.send(JSON.stringify({ error: 'Invalid token payload' }));
+        ws.close(4003, 'Unauthorized');
+        return;
+      }
+
+      // Verify user has access to request
+      const meetRequest = await prisma.request.findUnique({
+        where: { id: requestId },
+      });
+
+      if (!meetRequest) {
+        ws.send(JSON.stringify({ error: 'Request not found' }));
+        ws.close(4004, 'Not Found');
+        return;
+      }
+
+      if (meetRequest.senderId !== userId && meetRequest.receiverId !== userId) {
+        ws.send(JSON.stringify({ error: 'Forbidden' }));
+        ws.close(4003, 'Forbidden');
+        return;
+      }
+
+      // Register connection
+      connections.set(userId, ws);
+      logger.info(`WebSocket client connected: user=${userId}, request=${requestId}`);
+
+      ws.on('message', async (messageData: string) => {
+        try {
+          const data = JSON.parse(messageData);
+          const { type = 'text', content, mediaUrl, voiceDuration } = data;
+
+          if (!content) {
+            ws.send(JSON.stringify({ error: 'Content is required' }));
+            return;
+          }
+
+          // Determine recipient
+          const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
+
+          // Save to database
+          const message = await prisma.message.create({
+            data: {
+              requestId,
+              senderId: userId,
+              receiverId,
+              content,
+              type,
+              mediaUrl: mediaUrl || null,
+              voiceDuration: voiceDuration ? parseInt(voiceDuration, 10) : null,
+            },
+          });
+
+          const formattedMessage = {
+            id: message.id,
+            sender: 'them', // To the receiver, the sender is "them"
+            type: message.type,
+            text: message.type === 'text' ? message.content : undefined,
+            imageUri: message.type === 'image' ? (message.mediaUrl ?? message.content) : undefined,
+            voiceUri: message.type === 'voice' ? (message.mediaUrl ?? message.content) : undefined,
+            voiceDurationSec: message.voiceDuration ?? undefined,
+            createdAt: message.createdAt.getTime(),
+          };
+
+          // Deliver to recipient if connected
+          const recipientSocket = connections.get(receiverId);
+          if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
+            recipientSocket.send(JSON.stringify({ event: 'message', message: formattedMessage }));
+          }
+
+          // Send confirmation back to sender
+          ws.send(JSON.stringify({
+            event: 'ack',
+            message: {
+              ...formattedMessage,
+              sender: 'me', // To the sender, they are "me"
+            }
+          }));
+
+        } catch (error: any) {
+          logger.error(`WebSocket error processing message: ${error.message}`);
+          ws.send(JSON.stringify({ error: 'Failed to process message' }));
+        }
+      });
+
+      ws.on('close', () => {
+        connections.delete(userId);
+        logger.info(`WebSocket client disconnected: user=${userId}`);
+      });
+
+    } catch (error: any) {
+      logger.error(`WebSocket connection setup error: ${error.message}`);
+      ws.close(4500, 'Internal Server Error');
+    }
+  });
+}

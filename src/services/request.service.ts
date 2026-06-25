@@ -226,4 +226,35 @@ export class RequestService {
       sentAt: formatSentAt(updatedRequest.createdAt),
     };
   }
+
+  public static async getRequestMessages(userId: string, requestId: string) {
+    const request = await prisma.request.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) {
+      throw new AppError('Request not found', 404);
+    }
+
+    if (request.senderId !== userId && request.receiverId !== userId) {
+      throw new AppError('You are not authorized to view messages for this request', 403);
+    }
+
+    const messages = await prisma.message.findMany({
+      where: { requestId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return messages.map(msg => ({
+      id: msg.id,
+      sender: msg.senderId === userId ? 'me' : 'them',
+      type: msg.type,
+      text: msg.type === 'text' ? msg.content : undefined,
+      imageUri: msg.type === 'image' ? (msg.mediaUrl ?? msg.content) : undefined,
+      voiceUri: msg.type === 'voice' ? (msg.mediaUrl ?? msg.content) : undefined,
+      voiceDurationSec: msg.voiceDuration ?? undefined,
+      createdAt: msg.createdAt.getTime(),
+    }));
+  }
 }
+
