@@ -7,7 +7,8 @@ export class SessionController {
     try {
       if (!req.user) return next(new AppError('Unauthorized', 401));
       const { id: requestId } = req.params;
-      const session = await SessionService.startSession(req.user.id, requestId);
+      const { otp } = req.body;
+      const session = await SessionService.startSession(req.user.id, requestId, otp);
       res.status(200).json({ status: 'success', data: { session } });
     } catch (error) {
       next(error);

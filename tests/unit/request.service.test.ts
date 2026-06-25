@@ -259,7 +259,10 @@ describe('RequestService', () => {
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 'req-id-123' },
-        data: { status: RequestStatus.CONFIRMED },
+        data: { 
+          status: RequestStatus.CONFIRMED,
+          otp: expect.any(String),
+        },
         include: {
           sender: { include: { profile: true } },
           receiver: { include: { profile: true } },

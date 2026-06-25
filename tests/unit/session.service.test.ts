@@ -37,6 +37,7 @@ describe('SessionService', () => {
     senderId: 'user-sender',
     receiverId: 'user-receiver',
     status: RequestStatus.CONFIRMED,
+    otp: '1234',
   };
 
   const mockSenderUser = {
@@ -66,7 +67,7 @@ describe('SessionService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
       await expect(
-        SessionService.startSession('user-sender', 'req-1')
+        SessionService.startSession('user-sender', 'req-1', '1234')
       ).rejects.toThrow('Meet request not found');
     });
 
@@ -77,7 +78,7 @@ describe('SessionService', () => {
       });
 
       await expect(
-        SessionService.startSession('user-sender', 'req-1')
+        SessionService.startSession('user-sender', 'req-1', '1234')
       ).rejects.toThrow('Cannot start a session on an unconfirmed request');
     });
 
@@ -85,8 +86,16 @@ describe('SessionService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        SessionService.startSession('unauthorized-user', 'req-1')
+        SessionService.startSession('unauthorized-user', 'req-1', '1234')
       ).rejects.toThrow('You are not authorized to start a session for this request');
+    });
+
+    it('should throw an error if OTP is invalid', async () => {
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+
+      await expect(
+        SessionService.startSession('user-sender', 'req-1', 'invalid-otp')
+      ).rejects.toThrow('Invalid verification OTP code');
     });
 
     it('should return existing mapped session if it already exists', async () => {
@@ -107,7 +116,7 @@ describe('SessionService', () => {
       (prisma.session.findUnique as any).mockResolvedValue(existing);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession('user-sender', 'req-1');
+      const result = await SessionService.startSession('user-sender', 'req-1', '1234');
       expect(result.id).toBe('sess-1');
       expect(result.status).toBe('running');
     });
@@ -131,7 +140,7 @@ describe('SessionService', () => {
       (prisma.session.create as any).mockResolvedValue(created);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession('user-sender', 'req-1');
+      const result = await SessionService.startSession('user-sender', 'req-1', '1234');
       expect(prisma.session.create).toHaveBeenCalled();
       expect(sendToUser).toHaveBeenCalledTimes(2); // broadcast to sender and receiver
       expect(result.status).toBe('running');

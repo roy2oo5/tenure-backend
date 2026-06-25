@@ -94,7 +94,7 @@ function broadcastSessionUpdate(session: any, mappedForSender: MappedSession, ma
 }
 
 export class SessionService {
-  public static async startSession(userId: string, requestId: string): Promise<MappedSession> {
+  public static async startSession(userId: string, requestId: string, otp: string): Promise<MappedSession> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
     });
@@ -109,6 +109,10 @@ export class SessionService {
 
     if (request.senderId !== userId && request.receiverId !== userId) {
       throw new AppError('You are not authorized to start a session for this request', 403);
+    }
+
+    if (!otp || request.otp !== otp) {
+      throw new AppError('Invalid verification OTP code', 400);
     }
 
     const existingSession = await prisma.session.findUnique({

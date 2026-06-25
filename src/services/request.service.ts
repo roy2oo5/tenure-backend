@@ -29,6 +29,7 @@ export type MappedRequest = {
   message: string;
   status: FrontendRequestStatus;
   sentAt: string;
+  otp?: string | null;
 };
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
@@ -111,6 +112,7 @@ export class RequestService {
       message: newRequest.message ?? '',
       status: 'pending',
       sentAt: formatSentAt(newRequest.createdAt),
+      otp: null,
     };
   }
 
@@ -151,6 +153,7 @@ export class RequestService {
       message: req.message ?? '',
       status: mapStatusToFrontend(req.status),
       sentAt: formatSentAt(req.createdAt),
+      otp: null,
     }));
 
     const received = receivedRequests.map((req): MappedRequest => ({
@@ -168,6 +171,7 @@ export class RequestService {
       message: req.message ?? '',
       status: mapStatusToFrontend(req.status),
       sentAt: formatSentAt(req.createdAt),
+      otp: req.otp,
     }));
 
     return { sent, received };
@@ -197,9 +201,16 @@ export class RequestService {
       }
     }
 
+    const otpVal = status === 'confirmed'
+      ? String(Math.floor(1000 + Math.random() * 9000))
+      : null;
+
     const updatedRequest = await prisma.request.update({
       where: { id: requestId },
-      data: { status: mapStatusToBackend(status) },
+      data: { 
+        status: mapStatusToBackend(status),
+        otp: otpVal,
+      },
       include: {
         sender: { include: { profile: true } },
         receiver: { include: { profile: true } },
@@ -224,6 +235,7 @@ export class RequestService {
       message: updatedRequest.message ?? '',
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
+      otp: isSender ? null : updatedRequest.otp,
     };
   }
 
