@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
+import path from 'path';
 import { swaggerSpec } from './config/swagger';
 import routes from './routes';
 import { errorHandler } from './middlewares/error.middleware';
@@ -33,6 +34,9 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Bind API root path
 app.use('/api', routes);
+
+// Serve uploads statically (for local fallback storage)
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 // Catch-all for unhandled route requests
 app.all('*', (req, res, next) => {
