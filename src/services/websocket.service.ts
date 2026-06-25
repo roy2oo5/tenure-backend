@@ -144,3 +144,13 @@ export function initWebSocket(server: HttpServer) {
     }
   });
 }
+
+export function sendToUser(userId: string, data: any): boolean {
+  const ws = connections.get(userId);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+    return true;
+  }
+  return false;
+}
+

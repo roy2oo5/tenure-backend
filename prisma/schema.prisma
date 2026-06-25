@@ -95,6 +95,7 @@ model Request {
   message       String?       @default("")
   status        RequestStatus @default(PENDING)
   messages      Message[]     @relation("RequestMessages")
+  session       Session?
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
 
@@ -118,4 +119,31 @@ model Message {
 
   @@map("messages")
 }
+
+enum SessionStatus {
+  RUNNING
+  PAUSE_REQUESTED
+  PAUSED
+  RESUME_REQUESTED
+  ENDED
+}
+
+model Session {
+  id                  String        @id @default(uuid())
+  requestId           String        @unique @map("request_id")
+  senderId            String        @map("sender_id")
+  receiverId          String        @map("receiver_id")
+  status              SessionStatus @default(RUNNING)
+  startedAt           DateTime      @default(now()) @map("started_at")
+  endedAt             DateTime?     @map("ended_at")
+  totalElapsedSeconds Int           @default(0) @map("total_elapsed_seconds")
+  lastTimerStart      DateTime?     @map("last_timer_start")
+  lastActionBy        String?       @map("last_action_by")
+
+  request             Request       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+
+  @@map("sessions")
+}
+
 

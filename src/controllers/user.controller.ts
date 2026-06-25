@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { UserService } from '../services/user.service';
+import { SessionService } from '../services/session.service';
 import { AppError } from '../utils/app-error';
+
 
 export class UserController {
   public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -127,4 +129,20 @@ export class UserController {
       next(error);
     }
   }
+
+  public static async getActiveSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const session = await SessionService.getActiveSession(req.user.id);
+      res.status(200).json({
+        status: 'success',
+        data: { session },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

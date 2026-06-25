@@ -262,6 +262,8 @@ router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
  *         description: Not logged in or invalid token.
  */
 router.get('/me', protect, UserController.getMe);
+router.get('/active-session', protect, UserController.getActiveSession);
+
 
 /**
  * @swagger
