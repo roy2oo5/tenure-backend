@@ -435,6 +435,12 @@ router.get(
   DiscoverController.search,
 );
 router.get(
+  '/discover/instants',
+  protect,
+  validate(discoverSearchSchema),
+  DiscoverController.instants,
+);
+router.get(
   '/mates/:userId',
   protect,
   validate(mateProfileParamsSchema),

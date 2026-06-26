@@ -14,6 +14,7 @@ router.post('/', validate(createRequestSchema), RequestController.create);
 router.get('/', RequestController.list);
 router.patch('/:id/status', validate(updateRequestStatusSchema), RequestController.updateStatus);
 router.get('/:id/messages', RequestController.listMessages);
+router.delete('/:id/messages/:messageId', RequestController.deleteMessage);
 
 router.post('/:id/session/start', SessionController.start);
 router.post('/:id/session/pause-request', SessionController.pauseRequest);

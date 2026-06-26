@@ -80,6 +80,10 @@ export function initWebSocket(server: HttpServer) {
           const data = JSON.parse(messageData);
           const { type = 'text', content, mediaUrl, voiceDuration } = data;
 
+          if (type === 'ping' || type === 'pong') {
+            return;
+          }
+
           if (!content) {
             ws.send(JSON.stringify({ error: 'Content is required' }));
             return;

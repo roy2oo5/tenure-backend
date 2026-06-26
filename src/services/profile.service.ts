@@ -33,7 +33,33 @@ export type ProfileUpsertInput = {
   facebook?: string | null;
   youtube?: string | null;
   website?: string | null;
+  instantAvailable?: boolean;
+  instantAvailableUntil?: Date | null;
+  instantCategories?: string[] | null;
+  instantNote?: string | null;
 };
+
+function normalizeTimeRange(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value
+    .replace(
+      /(?:\u0393\u00c7\u00f4|\u00e2\u20ac\u201c|\u2013|\u2014)/g,
+      '-'
+    )
+    .replace(
+      /(?:\u0393\u00c7\u00d6|\u00e2\u20ac\u2122|\u2019|\u2018|\u202f|\u00a0)/g,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*/g, ' - ')
+    .trim()
+    .replace(/\b(am|pm)\b/g, marker => marker.toUpperCase());
+
+  return normalized || null;
+}
 
 export class ProfileService {
   /**
@@ -43,6 +69,34 @@ export class ProfileService {
     userId: string,
     data: ProfileUpsertInput
   ): Promise<Profile> {
+    const existingProfile = await prisma.profile.findUnique({
+      where: { userId },
+      select: {
+        tenureId: true,
+        instantAvailable: true,
+        instantAvailableUntil: true,
+        instantCategories: true,
+        instantNote: true,
+      },
+    });
+
+    const instantAvailable =
+      data.instantAvailable !== undefined
+        ? data.instantAvailable
+        : existingProfile?.instantAvailable ?? false;
+    const instantAvailableUntil =
+      data.instantAvailableUntil !== undefined
+        ? data.instantAvailableUntil
+        : existingProfile?.instantAvailableUntil ?? null;
+    const instantCategories =
+      data.instantCategories !== undefined
+        ? data.instantCategories ?? []
+        : existingProfile?.instantCategories ?? [];
+    const instantNote =
+      data.instantNote !== undefined
+        ? data.instantNote?.trim() || null
+        : existingProfile?.instantNote ?? null;
+
     const formattedData = {
       profilePhoto: data.profilePhoto ?? null,
       fullName: data.fullName,
@@ -61,7 +115,7 @@ export class ProfileService {
       vehicles: data.vehicles ?? [],
       interests: data.interests ?? [],
       availableDays: data.availableDays ?? [],
-      availableTimeRange: data.availableTimeRange ?? null,
+      availableTimeRange: normalizeTimeRange(data.availableTimeRange),
       bestTime: data.bestTime ?? null,
       comfortPreferredPlaces: data.comfortPreferredPlaces ?? null,
       comfortTravelRange: data.comfortTravelRange ?? null,
@@ -74,12 +128,11 @@ export class ProfileService {
       facebook: data.facebook ?? null,
       youtube: data.youtube ?? null,
       website: data.website ?? null,
+      instantAvailable,
+      instantAvailableUntil: instantAvailable ? instantAvailableUntil : null,
+      instantCategories: instantAvailable ? instantCategories : [],
+      instantNote: instantAvailable ? instantNote : null,
     };
-
-    const existingProfile = await prisma.profile.findUnique({
-      where: { userId },
-      select: { tenureId: true },
-    });
 
     const tenureId = existingProfile?.tenureId || (await generateUniqueTenureId());
 

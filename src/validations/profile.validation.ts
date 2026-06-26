@@ -38,6 +38,18 @@ export const createProfileSchema = z.object({
     facebook: z.string().optional().nullable(),
     youtube: z.string().optional().nullable(),
     website: z.string().optional().nullable(),
+    instantAvailable: z.boolean().optional(),
+    instantAvailableUntil: z.preprocess(
+      (arg) => {
+        if (arg === null || arg === undefined || arg === '') {
+          return null;
+        }
+        return typeof arg === 'string' ? new Date(arg) : arg;
+      },
+      z.date().optional().nullable()
+    ),
+    instantCategories: stringArray,
+    instantNote: z.string().optional().nullable(),
     aadhaarVerified: z.boolean().optional(),
     aadhaarMasked: z.string().optional().nullable(),
   }),

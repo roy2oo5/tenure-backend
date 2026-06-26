@@ -2,6 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { RequestStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
+import { sendToUser } from './websocket.service';
 
 export type CreateRequestInput = {
   receiverId: string;
@@ -31,6 +32,7 @@ export type MappedRequest = {
   status: FrontendRequestStatus;
   sentAt: string;
   otp?: string | null;
+  requesterGender?: string | null;
 };
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
@@ -69,6 +71,16 @@ const formatSentAt = (date: Date): string => {
   });
 };
 
+const getProfileAvatar = (
+  profile?: { profilePhoto?: string | null; gallery?: string[] | null } | null,
+): string => {
+  const profilePhoto = profile?.profilePhoto?.trim();
+  if (profilePhoto) {
+    return profilePhoto;
+  }
+  return profile?.gallery?.find(uri => uri.trim()) ?? '';
+};
+
 export class RequestService {
   public static async createRequest(senderId: string, data: CreateRequestInput): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
@@ -104,7 +116,7 @@ export class RequestService {
       mateUserId: receiver.id,
       mateName: receiver.profile?.fullName ?? receiver.name ?? 'Anonymous',
       mateTenureId: receiver.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: receiver.profile?.profilePhoto ?? '',
+      mateAvatar: getProfileAvatar(receiver.profile),
       categoryId: newRequest.categoryId,
       categoryLabel: newRequest.categoryLabel,
       meetLocation: newRequest.meetLocation,
@@ -114,6 +126,7 @@ export class RequestService {
       status: 'pending',
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
+      requesterGender: null,
     };
   }
 
@@ -145,7 +158,7 @@ export class RequestService {
       mateUserId: req.receiver.id,
       mateName: req.receiver.profile?.fullName ?? req.receiver.name ?? 'Anonymous',
       mateTenureId: req.receiver.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: req.receiver.profile?.profilePhoto ?? '',
+      mateAvatar: getProfileAvatar(req.receiver.profile),
       categoryId: req.categoryId,
       categoryLabel: req.categoryLabel,
       meetLocation: req.meetLocation,
@@ -155,6 +168,7 @@ export class RequestService {
       status: mapStatusToFrontend(req.status),
       sentAt: formatSentAt(req.createdAt),
       otp: null,
+      requesterGender: null,
     }));
 
     const received = receivedRequests.map((req): MappedRequest => ({
@@ -163,7 +177,7 @@ export class RequestService {
       mateUserId: req.sender.id,
       mateName: req.sender.profile?.fullName ?? req.sender.name ?? 'Anonymous',
       mateTenureId: req.sender.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: req.sender.profile?.profilePhoto ?? '',
+      mateAvatar: getProfileAvatar(req.sender.profile),
       categoryId: req.categoryId,
       categoryLabel: req.categoryLabel,
       meetLocation: req.meetLocation,
@@ -173,6 +187,7 @@ export class RequestService {
       status: mapStatusToFrontend(req.status),
       sentAt: formatSentAt(req.createdAt),
       otp: req.otp,
+      requesterGender: req.sender.profile?.gender ?? null,
     }));
 
     return { sent, received };
@@ -251,7 +266,7 @@ export class RequestService {
       mateUserId: partner.id,
       mateName: partner.profile?.fullName ?? partner.name ?? 'Anonymous',
       mateTenureId: partner.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: partner.profile?.profilePhoto ?? '',
+      mateAvatar: getProfileAvatar(partner.profile),
       categoryId: updatedRequest.categoryId,
       categoryLabel: updatedRequest.categoryLabel,
       meetLocation: updatedRequest.meetLocation,
@@ -261,6 +276,7 @@ export class RequestService {
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
       otp: isSender ? null : updatedRequest.otp,
+      requesterGender: updatedRequest.sender.profile?.gender ?? null,
     };
   }
 
@@ -292,6 +308,47 @@ export class RequestService {
       voiceDurationSec: msg.voiceDuration ?? undefined,
       createdAt: msg.createdAt.getTime(),
     }));
+  }
+
+  public static async deleteRequestMessage(
+    userId: string,
+    requestId: string,
+    messageId: string,
+  ): Promise<void> {
+    const request = await prisma.request.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) {
+      throw new AppError('Request not found', 404);
+    }
+
+    if (request.senderId !== userId && request.receiverId !== userId) {
+      throw new AppError('You are not authorized to delete messages for this request', 403);
+    }
+
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+    });
+
+    if (!message || message.requestId !== requestId) {
+      throw new AppError('Message not found', 404);
+    }
+
+    if (message.senderId !== userId) {
+      throw new AppError('You can only delete your own messages', 403);
+    }
+
+    await prisma.message.delete({
+      where: { id: messageId },
+    });
+
+    const receiverId = request.senderId === userId ? request.receiverId : request.senderId;
+    sendToUser(receiverId, {
+      event: 'message_deleted',
+      requestId,
+      messageId,
+    });
   }
 }
 

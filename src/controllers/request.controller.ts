@@ -65,5 +65,21 @@ export class RequestController {
       next(error);
     }
   }
+
+  public static async deleteMessage(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const { id, messageId } = req.params;
+      await RequestService.deleteRequestMessage(req.user.id, id, messageId);
+      res.status(200).json({
+        status: 'success',
+        data: { messageId },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 

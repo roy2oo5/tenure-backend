@@ -67,10 +67,15 @@ model Profile {
   facebook         String?
   youtube          String?
   website          String?
+  instantAvailable Boolean   @default(false) @map("instant_available")
+  instantAvailableUntil DateTime? @map("instant_available_until")
+  instantCategories String[] @default([]) @map("instant_categories")
+  instantNote      String?   @map("instant_note")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
   @@index([district])
+  @@index([instantAvailable, instantAvailableUntil])
   @@map("profiles")
 }
 

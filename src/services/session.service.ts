@@ -12,6 +12,8 @@ export type MappedSession = {
   status: 'running' | 'pause_requested' | 'paused' | 'resume_requested' | 'ended';
   startedAt: number;
   endedAt: number | null;
+  fromDateTime: string;
+  toDateTime: string;
   elapsedSec: number;
   mateUserId: string;
   mateName: string;
@@ -26,10 +28,15 @@ async function mapSession(session: any, currentUserId: string): Promise<MappedSe
   const isSender = session.senderId === currentUserId;
   const partnerId = isSender ? session.receiverId : session.senderId;
 
-  const partner = await prisma.user.findUnique({
-    where: { id: partnerId },
-    include: { profile: true },
-  });
+  const [partner, request] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: partnerId },
+      include: { profile: true },
+    }),
+    session.request
+      ? Promise.resolve(session.request)
+      : prisma.request.findUnique({ where: { id: session.requestId } }),
+  ]);
 
   const mateProfile = isSender
     ? partner?.profile
@@ -78,6 +85,8 @@ async function mapSession(session: any, currentUserId: string): Promise<MappedSe
     status: statusMapped,
     startedAt: session.startedAt.getTime(),
     endedAt: session.endedAt ? session.endedAt.getTime() : null,
+    fromDateTime: request?.fromDateTime?.toISOString() ?? session.startedAt.toISOString(),
+    toDateTime: request?.toDateTime?.toISOString() ?? (session.endedAt ?? session.startedAt).toISOString(),
     elapsedSec,
     mateUserId: partnerId,
     mateName: partner?.profile?.fullName ?? partner?.name ?? 'Anonymous',
@@ -307,11 +316,11 @@ export class SessionService {
 
     const now = new Date();
     let additionalSeconds = 0;
-    const isRunning = [
+    const isRunning = ([
       SessionStatus.RUNNING,
       SessionStatus.PAUSE_REQUESTED,
       SessionStatus.RESUME_REQUESTED,
-    ].includes(session.status);
+    ] as SessionStatus[]).includes(session.status);
 
     if (isRunning && session.lastTimerStart) {
       additionalSeconds = Math.floor((now.getTime() - session.lastTimerStart.getTime()) / 1000);
@@ -340,12 +349,12 @@ export class SessionService {
       await NotificationService.createNotification(
         updated.senderId,
         'payment_sent',
-        `you paid ₹${mappedSender.billingAmount} to ${mappedSender.partnerName}`
+        `you paid ${mappedSender.billingAmount} to ${mappedSender.mateName}`
       );
       await NotificationService.createNotification(
         updated.receiverId,
         'payment_received',
-        `you received ₹${mappedReceiver.billingAmount} from ${mappedReceiver.partnerName}`
+        `you received ${mappedReceiver.billingAmount} from ${mappedReceiver.mateName}`
       );
     } catch (notifErr: any) {
       console.error('Failed to create session billing notifications:', notifErr.message);
