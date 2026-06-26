@@ -6,6 +6,9 @@ vi.mock('@/config/database', () => ({
     profile: {
       findMany: vi.fn(),
     },
+    block: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -57,7 +60,7 @@ describe('DiscoverService', () => {
     expect(prisma.profile.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          userId: { not: 'current-user' },
+          userId: { notIn: ['current-user'] },
         }),
       }),
     );

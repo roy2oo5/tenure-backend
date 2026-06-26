@@ -19,6 +19,9 @@ vi.mock('@/config/database', () => ({
     notification: {
       create: vi.fn(),
     },
+    block: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 

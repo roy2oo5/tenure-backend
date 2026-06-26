@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { UserController } from '../controllers/user.controller';
 import { ProfileController } from '../controllers/profile.controller';
 import { DiscoverController } from '../controllers/discover.controller';
+import { BlockController } from '../controllers/block.controller';
 import { validate } from '../middlewares/validation.middleware';
 import { protect, restrictTo } from '../middlewares/auth.middleware';
 import { registerSchema, loginSchema, updateUserSchema, phoneAuthSchema } from '../validations/user.validation';
@@ -311,6 +312,10 @@ router.get('/active-session', protect, UserController.getActiveSession);
 router.patch('/update-me', protect, validate(updateUserSchema), UserController.updateMe);
 router.patch('/deactivate-me', protect, UserController.deactivateMe);
 router.delete('/delete-me', protect, UserController.deleteMe);
+router.patch('/change-password', protect, UserController.changePassword);
+router.post('/block', protect, BlockController.block);
+router.post('/unblock', protect, BlockController.unblock);
+router.get('/blocked', protect, BlockController.getBlocked);
 
 /**
  * @swagger

@@ -96,6 +96,18 @@ export class RequestService {
       throw new AppError('The target companion user does not exist', 404);
     }
 
+    const isBlocked = await prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: senderId, blockedId: data.receiverId },
+          { blockerId: data.receiverId, blockedId: senderId },
+        ],
+      },
+    });
+    if (isBlocked) {
+      throw new AppError('Cannot send request to a blocked user or if blocked by them', 400);
+    }
+
     const newRequest = await prisma.request.create({
       data: {
         senderId,

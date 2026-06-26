@@ -37,6 +37,13 @@ export type ProfileUpsertInput = {
   instantAvailableUntil?: Date | null;
   instantCategories?: string[] | null;
   instantNote?: string | null;
+  profileVisibility?: boolean;
+  notifyRequests?: boolean;
+  notifyChat?: boolean;
+  notifyReminders?: boolean;
+  emergencyName?: string | null;
+  emergencyPhone?: string | null;
+  emergencyRelation?: string | null;
 };
 
 function normalizeTimeRange(value?: string | null): string | null {
@@ -77,6 +84,13 @@ export class ProfileService {
         instantAvailableUntil: true,
         instantCategories: true,
         instantNote: true,
+        profileVisibility: true,
+        notifyRequests: true,
+        notifyChat: true,
+        notifyReminders: true,
+        emergencyName: true,
+        emergencyPhone: true,
+        emergencyRelation: true,
       },
     });
 
@@ -96,6 +110,35 @@ export class ProfileService {
       data.instantNote !== undefined
         ? data.instantNote?.trim() || null
         : existingProfile?.instantNote ?? null;
+
+    const profileVisibility =
+      data.profileVisibility !== undefined
+        ? data.profileVisibility
+        : existingProfile?.profileVisibility ?? true;
+    const notifyRequests =
+      data.notifyRequests !== undefined
+        ? data.notifyRequests
+        : existingProfile?.notifyRequests ?? true;
+    const notifyChat =
+      data.notifyChat !== undefined
+        ? data.notifyChat
+        : existingProfile?.notifyChat ?? true;
+    const notifyReminders =
+      data.notifyReminders !== undefined
+        ? data.notifyReminders
+        : existingProfile?.notifyReminders ?? true;
+    const emergencyName =
+      data.emergencyName !== undefined
+        ? data.emergencyName?.trim() || null
+        : existingProfile?.emergencyName ?? null;
+    const emergencyPhone =
+      data.emergencyPhone !== undefined
+        ? data.emergencyPhone?.trim() || null
+        : existingProfile?.emergencyPhone ?? null;
+    const emergencyRelation =
+      data.emergencyRelation !== undefined
+        ? data.emergencyRelation?.trim() || null
+        : existingProfile?.emergencyRelation ?? null;
 
     const formattedData = {
       profilePhoto: data.profilePhoto ?? null,
@@ -132,6 +175,13 @@ export class ProfileService {
       instantAvailableUntil: instantAvailable ? instantAvailableUntil : null,
       instantCategories: instantAvailable ? instantCategories : [],
       instantNote: instantAvailable ? instantNote : null,
+      profileVisibility,
+      notifyRequests,
+      notifyChat,
+      notifyReminders,
+      emergencyName,
+      emergencyPhone,
+      emergencyRelation,
     };
 
     const tenureId = existingProfile?.tenureId || (await generateUniqueTenureId());

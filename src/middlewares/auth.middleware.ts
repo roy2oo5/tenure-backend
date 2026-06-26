@@ -15,7 +15,7 @@ interface DecodedToken {
 
 export const protect = async (
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
@@ -62,7 +62,7 @@ export const protect = async (
 };
 
 export const restrictTo = (...roles: Role[]) => {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.user) {
       return next(new AppError('User not authenticated.', 401));
     }

@@ -181,6 +181,34 @@ export class UserService {
     return formatUser(updatedUser);
   }
 
+  public static async changePassword(
+    userId: string,
+    currentPassword?: string,
+    newPassword?: string
+  ): Promise<void> {
+    if (!currentPassword || !newPassword) {
+      throw new AppError('Please provide current password and new password', 400);
+    }
+    if (newPassword.length < 8) {
+      throw new AppError('New password must be at least 8 characters long', 400);
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      throw new AppError('Incorrect current password', 400);
+    }
+
+    await this.updateUser(userId, { password: newPassword });
+  }
+
   public static async deleteUser(id: string): Promise<void> {
     await prisma.user.delete({
       where: { id },

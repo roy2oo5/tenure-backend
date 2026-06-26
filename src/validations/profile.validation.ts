@@ -52,5 +52,12 @@ export const createProfileSchema = z.object({
     instantNote: z.string().optional().nullable(),
     aadhaarVerified: z.boolean().optional(),
     aadhaarMasked: z.string().optional().nullable(),
+    profileVisibility: z.boolean().optional(),
+    notifyRequests: z.boolean().optional(),
+    notifyChat: z.boolean().optional(),
+    notifyReminders: z.boolean().optional(),
+    emergencyName: z.string().optional().nullable(),
+    emergencyPhone: z.string().optional().nullable(),
+    emergencyRelation: z.string().optional().nullable(),
   }),
 });

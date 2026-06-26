@@ -177,8 +177,27 @@ export class DiscoverService {
     currentUserId: string,
     input: DiscoverSearchInput,
   ): Promise<DiscoverMateResult[]> {
+    const blocks = await prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: currentUserId },
+          { blockedId: currentUserId },
+        ],
+      },
+      select: {
+        blockerId: true,
+        blockedId: true,
+      },
+    });
+    const blockedUserIds = blocks.map((b) =>
+      b.blockerId === currentUserId ? b.blockedId : b.blockerId
+    );
+
     const where: Prisma.ProfileWhereInput = {
-      userId: { not: currentUserId },
+      userId: {
+        notIn: [currentUserId, ...blockedUserIds],
+      },
+      profileVisibility: true,
       categories: { isEmpty: false },
       user: {
         isActive: true,
@@ -214,12 +233,29 @@ export class DiscoverService {
       return null;
     }
 
+    const isBlocked = await prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: currentUserId, blockedId: targetUserId },
+          { blockerId: targetUserId, blockedId: currentUserId },
+        ],
+      },
+    });
+    if (isBlocked) {
+      return null;
+    }
+
     const profile = await prisma.profile.findUnique({
       where: { userId: targetUserId },
       include: { user: true },
     });
 
-    if (!profile || !profile.user?.isActive || !isDiscoverableProfile(profile)) {
+    if (
+      !profile ||
+      !profile.user?.isActive ||
+      !isDiscoverableProfile(profile) ||
+      !profile.profileVisibility
+    ) {
       return null;
     }
 
@@ -230,8 +266,27 @@ export class DiscoverService {
     currentUserId: string,
     input: DiscoverSearchInput,
   ): Promise<DiscoverMateResult[]> {
+    const blocks = await prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: currentUserId },
+          { blockedId: currentUserId },
+        ],
+      },
+      select: {
+        blockerId: true,
+        blockedId: true,
+      },
+    });
+    const blockedUserIds = blocks.map((b) =>
+      b.blockerId === currentUserId ? b.blockedId : b.blockerId
+    );
+
     const where: Prisma.ProfileWhereInput = {
-      userId: { not: currentUserId },
+      userId: {
+        notIn: [currentUserId, ...blockedUserIds],
+      },
+      profileVisibility: true,
       instantAvailable: true,
       instantAvailableUntil: { gt: new Date() },
       categories: { isEmpty: false },

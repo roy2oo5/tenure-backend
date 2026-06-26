@@ -39,7 +39,7 @@ app.use('/api', routes);
 app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 // Catch-all for unhandled route requests
-app.all('*', (req, res, next) => {
+app.all('*', (req, _res, next) => {
   next(new AppError(`Resource ${req.originalUrl} not found on this server`, 404));
 });
 

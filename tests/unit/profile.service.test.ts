@@ -34,6 +34,17 @@ const extendedProfileDefaults = {
   facebook: null,
   youtube: null,
   website: null,
+  instantAvailable: false,
+  instantAvailableUntil: null,
+  instantCategories: [],
+  instantNote: null,
+  profileVisibility: true,
+  notifyRequests: true,
+  notifyChat: true,
+  notifyReminders: true,
+  emergencyName: null,
+  emergencyPhone: null,
+  emergencyRelation: null,
 };
 
 describe('ProfileService', () => {
@@ -73,7 +84,20 @@ describe('ProfileService', () => {
 
       expect(prisma.profile.findUnique).toHaveBeenCalledWith({
         where: { userId: 'user-id-123' },
-        select: { tenureId: true },
+        select: {
+          tenureId: true,
+          instantAvailable: true,
+          instantAvailableUntil: true,
+          instantCategories: true,
+          instantNote: true,
+          profileVisibility: true,
+          notifyRequests: true,
+          notifyChat: true,
+          notifyReminders: true,
+          emergencyName: true,
+          emergencyPhone: true,
+          emergencyRelation: true,
+        },
       });
       expect(prisma.profile.upsert).toHaveBeenCalledWith({
         where: { userId: 'user-id-123' },
@@ -133,7 +157,20 @@ describe('ProfileService', () => {
 
       expect(prisma.profile.findUnique).toHaveBeenCalledWith({
         where: { userId: 'user-id-123' },
-        select: { tenureId: true },
+        select: {
+          tenureId: true,
+          instantAvailable: true,
+          instantAvailableUntil: true,
+          instantCategories: true,
+          instantNote: true,
+          profileVisibility: true,
+          notifyRequests: true,
+          notifyChat: true,
+          notifyReminders: true,
+          emergencyName: true,
+          emergencyPhone: true,
+          emergencyRelation: true,
+        },
       });
       expect(prisma.profile.upsert).toHaveBeenCalledWith({
         where: { userId: 'user-id-123' },

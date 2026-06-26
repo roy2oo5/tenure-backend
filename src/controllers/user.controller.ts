@@ -59,7 +59,7 @@ export class UserController {
     }
   }
 
-  public static async getAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async getAll(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const users = await UserService.getAllUsers();
       res.status(200).json({
@@ -124,6 +124,24 @@ export class UserController {
       res.status(204).json({
         status: 'success',
         data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async changePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const { currentPassword, newPassword } = req.body;
+
+      await UserService.changePassword(req.user.id, currentPassword, newPassword);
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Password successfully updated',
       });
     } catch (error) {
       next(error);

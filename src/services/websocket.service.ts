@@ -71,6 +71,21 @@ export function initWebSocket(server: HttpServer) {
         return;
       }
 
+      // Verify block relation
+      const block = await prisma.block.findFirst({
+        where: {
+          OR: [
+            { blockerId: meetRequest.senderId, blockedId: meetRequest.receiverId },
+            { blockerId: meetRequest.receiverId, blockedId: meetRequest.senderId },
+          ],
+        },
+      });
+      if (block) {
+        ws.send(JSON.stringify({ error: 'Blocked' }));
+        ws.close(4005, 'Blocked');
+        return;
+      }
+
       // Register connection
       connections.set(userId, ws);
       logger.info(`WebSocket client connected: user=${userId}, request=${requestId}`);
