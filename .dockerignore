@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+build
+coverage
+
+# Local environment files
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+eslint-debug.log*
+*.log
+
+# Git and local tooling
+.git
+.gitignore
+.agents
+.codex
+
+# IDE / OS files
+.DS_Store
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Files not needed to build the production image
+tests
+scripts
+vitest.config.ts
+eslint.config.js
+.prettierrc
+pending_works.md
