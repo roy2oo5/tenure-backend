@@ -28,6 +28,9 @@ export type DiscoverMateResult = {
   categoryRates: Record<string, number>;
   languages: string[];
   about: string | null;
+  availableDays: string[];
+  availableTimeRange: string | null;
+  bestTime: string | null;
   aadhaarVerified: boolean;
   gallery: string[];
   instagram: string | null;
@@ -218,6 +221,9 @@ function toDiscoverMate(profile: Profile, requestedCategory?: string | null): Di
     categoryRates: categoryRatesRecord(profile.categoryRates),
     languages: profile.languages,
     about: profile.about,
+    availableDays: profile.availableDays,
+    availableTimeRange: profile.availableTimeRange,
+    bestTime: profile.bestTime,
     aadhaarVerified: profile.aadhaarVerified,
     gallery: profile.gallery,
     instagram: profile.instagram,

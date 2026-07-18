@@ -9,6 +9,7 @@ vi.mock('@/config/database', () => ({
       findMany: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     user: {
       findUnique: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@/config/database', () => ({
 describe('RequestService', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   describe('createRequest', () => {
@@ -77,12 +79,12 @@ describe('RequestService', () => {
         categoryId: 'study',
         categoryLabel: 'Study Partner',
         meetLocation: 'Library',
-        fromDateTime: new Date('2026-06-20T10:00:00.000Z'),
-        toDateTime: new Date('2026-06-20T12:00:00.000Z'),
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
         message: 'Let us study together',
         status: RequestStatus.PENDING,
-        createdAt: new Date('2026-06-20T08:00:00.000Z'),
-        updatedAt: new Date('2026-06-20T08:00:00.000Z'),
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
       };
 
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
@@ -93,8 +95,8 @@ describe('RequestService', () => {
         categoryId: 'study',
         categoryLabel: 'Study Partner',
         meetLocation: 'Library',
-        fromDateTime: new Date('2026-06-20T10:00:00.000Z'),
-        toDateTime: new Date('2026-06-20T12:00:00.000Z'),
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
         message: 'Let us study together',
       });
 
@@ -119,11 +121,11 @@ describe('RequestService', () => {
           categoryId: 'study',
           categoryLabel: 'Study Partner',
           meetLocation: 'Library',
-          fromDateTime: new Date('2026-06-20T10:00:00.000Z'),
-          toDateTime: new Date('2026-06-20T12:00:00.000Z'),
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
           message: 'Study!',
           status: RequestStatus.PENDING,
-          createdAt: new Date('2026-06-20T08:00:00.000Z'),
+          createdAt: new Date('2027-06-20T08:00:00.000Z'),
           receiver: {
             id: 'user-id-receiver',
             name: 'Jane Doe',
@@ -144,11 +146,11 @@ describe('RequestService', () => {
           categoryId: 'food',
           categoryLabel: 'Food Buddy',
           meetLocation: 'Cafe',
-          fromDateTime: new Date('2026-06-20T14:00:00.000Z'),
-          toDateTime: new Date('2026-06-20T15:00:00.000Z'),
+          fromDateTime: new Date('2027-06-20T14:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T15:00:00.000Z'),
           message: 'Eat!',
           status: RequestStatus.CONFIRMED,
-          createdAt: new Date('2026-06-20T09:00:00.000Z'),
+          createdAt: new Date('2027-06-20T09:00:00.000Z'),
           sender: {
             id: 'user-id-sender',
             name: 'John Smith',
@@ -228,8 +230,8 @@ describe('RequestService', () => {
         categoryId: 'study',
         categoryLabel: 'Study Partner',
         meetLocation: 'Library',
-        fromDateTime: new Date('2026-06-20T10:00:00.000Z'),
-        toDateTime: new Date('2026-06-20T12:00:00.000Z'),
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
         message: 'Let us study together',
         status: RequestStatus.PENDING,
       };
@@ -278,6 +280,110 @@ describe('RequestService', () => {
       expect(result.direction).toBe('received');
       expect(result.mateUserId).toBe('user-id-1');
       expect(result.mateName).toBe('Sender Profile');
+    });
+
+    it('should charge one hour when sender cancels a confirmed request within 1 hour of start', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T09:30:00.000Z'));
+
+      const mockRequest = {
+        id: 'req-id-123',
+        senderId: 'user-id-1',
+        receiverId: 'user-id-2',
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        message: 'Let us study together',
+        bookingFor: 'self',
+        beneficiaryName: null,
+        beneficiaryPhone: null,
+        beneficiaryRelation: null,
+        beneficiaryNote: null,
+        status: RequestStatus.CONFIRMED,
+        session: null,
+        receiver: {
+          id: 'user-id-2',
+          name: 'Receiver name',
+          profile: {
+            fullName: 'Receiver Profile',
+            tenureId: 'TN222',
+            profilePhoto: '',
+            gallery: [],
+            hourlyRate: 80,
+            categoryRates: null,
+          },
+        },
+      };
+
+      const mockUpdated = {
+        ...mockRequest,
+        status: RequestStatus.CANCELLED,
+        cancellationFee: 80,
+        cancellationFeeReason: 'Cancelled within 1 hour of the scheduled start time',
+        cancelledAt: new Date('2027-06-20T09:30:00.000Z'),
+        cancelledById: 'user-id-1',
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        sender: {
+          id: 'user-id-1',
+          name: 'Sender name',
+          profile: {
+            fullName: 'Sender Profile',
+            tenureId: 'TN111',
+            profilePhoto: '',
+            gender: 'man',
+          },
+        },
+      };
+
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.request.update as any).mockResolvedValue(mockUpdated);
+
+      const result = await RequestService.updateRequestStatus(
+        'user-id-1',
+        'req-id-123',
+        'cancelled',
+      );
+
+      expect(prisma.request.update).toHaveBeenCalledWith({
+        where: { id: 'req-id-123' },
+        data: {
+          status: RequestStatus.CANCELLED,
+          otp: null,
+          cancelledAt: new Date('2027-06-20T09:30:00.000Z'),
+          cancelledById: 'user-id-1',
+          cancellationFee: 80,
+          cancellationFeeReason: 'Cancelled within 1 hour of the scheduled start time',
+        },
+        include: {
+          sender: { include: { profile: true } },
+          receiver: { include: { profile: true } },
+        },
+      });
+      expect(result.status).toBe('cancelled');
+      expect(result.cancellationFee).toBe(80);
+      expect(result.cancelledById).toBe('user-id-1');
+      expect(prisma.notification.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('should block request cancellation after the session has started', async () => {
+      const mockRequest = {
+        id: 'req-id-123',
+        senderId: 'user-id-1',
+        receiverId: 'user-id-2',
+        status: RequestStatus.CONFIRMED,
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        session: { id: 'session-id-1' },
+        receiver: { profile: { hourlyRate: 80, categoryRates: null } },
+      };
+
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+
+      await expect(
+        RequestService.updateRequestStatus('user-id-1', 'req-id-123', 'cancelled'),
+      ).rejects.toThrow('This meet has already started. End the session instead.');
     });
   });
 

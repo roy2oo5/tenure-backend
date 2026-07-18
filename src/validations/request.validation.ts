@@ -21,6 +21,29 @@ export const createRequestSchema = z.object({
       })
     ),
     message: z.string().optional().nullable(),
+    bookingFor: z.enum(['self', 'someone_else']).default('self'),
+    beneficiaryName: z.string().trim().optional().nullable(),
+    beneficiaryPhone: z.string().trim().optional().nullable(),
+    beneficiaryRelation: z.string().trim().optional().nullable(),
+    beneficiaryNote: z.string().trim().max(240, 'Note must be 240 characters or less').optional().nullable(),
+  }).superRefine((body, ctx) => {
+    if (body.bookingFor !== 'someone_else') {
+      return;
+    }
+    if (!body.beneficiaryName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['beneficiaryName'],
+        message: 'Person name is required',
+      });
+    }
+    if (!body.beneficiaryPhone?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['beneficiaryPhone'],
+        message: 'Person phone is required',
+      });
+    }
   }),
 });
 

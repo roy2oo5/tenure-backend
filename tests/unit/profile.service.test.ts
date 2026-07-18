@@ -1,5 +1,6 @@
 import { ProfileService } from '@/services/profile.service';
 import { prisma } from '@/config/database';
+import { Prisma } from '@prisma/client';
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -16,8 +17,11 @@ vi.mock('@/utils/tenure-id', () => ({
 
 const extendedProfileDefaults = {
   about: null,
+  categoryRates: Prisma.JsonNull,
   vibes: [],
   professions: [],
+  qualification: null,
+  bloodGroup: null,
   vehicles: [],
   interests: [],
   availableDays: [],

@@ -1,8 +1,9 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
-import { RequestStatus, SessionStatus } from '@prisma/client';
+import { Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
 import { sendToUser } from './websocket.service';
+import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type CreateRequestInput = {
   receiverId: string;
@@ -12,6 +13,11 @@ export type CreateRequestInput = {
   fromDateTime: Date;
   toDateTime: Date;
   message?: string | null;
+  bookingFor?: 'self' | 'someone_else';
+  beneficiaryName?: string | null;
+  beneficiaryPhone?: string | null;
+  beneficiaryRelation?: string | null;
+  beneficiaryNote?: string | null;
 };
 
 export type FrontendRequestStatus = 'pending' | 'confirmed' | 'declined' | 'cancelled' | 'expired' | 'ended';
@@ -29,13 +35,29 @@ export type MappedRequest = {
   fromDateTime: string;
   toDateTime: string;
   message: string;
+  bookingFor: 'self' | 'someone_else';
+  beneficiaryName?: string | null;
+  beneficiaryPhone?: string | null;
+  beneficiaryRelation?: string | null;
+  beneficiaryNote?: string | null;
   status: FrontendRequestStatus;
   sentAt: string;
   sessionStatus?: string | null;
   sessionEndedAt?: string | null;
   otp?: string | null;
   requesterGender?: string | null;
+  cancellationFee: number;
+  cancellationFeeReason?: string | null;
+  cancelledAt?: string | null;
+  cancelledById?: string | null;
+  cancellationFeeApplies: boolean;
+  cancellationFeePreview: number;
 };
+
+const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
+const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
+const EXPIRABLE_STATUSES = [RequestStatus.PENDING, RequestStatus.CONFIRMED] as RequestStatus[];
+const DAY_KEYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
   switch (status) {
@@ -83,6 +105,30 @@ const mapRequestStatusWithSession = (
   return mapStatusToFrontend(status);
 };
 
+const isExpirableStatus = (status: RequestStatus): boolean =>
+  EXPIRABLE_STATUSES.includes(status);
+
+const shouldExpireRequest = (request: {
+  status: RequestStatus;
+  toDateTime?: Date | null;
+  session?: unknown | null;
+}): boolean => {
+  return Boolean(
+    isExpirableStatus(request.status) &&
+      request.toDateTime &&
+      request.toDateTime.getTime() <= Date.now() &&
+      !request.session,
+  );
+};
+
+const effectiveRequestStatus = (request: {
+  status: RequestStatus;
+  toDateTime?: Date | null;
+  session?: unknown | null;
+}): RequestStatus => {
+  return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
+};
+
 const mapSessionStatus = (
   session?: { status: SessionStatus } | null,
 ): string | null => {
@@ -111,7 +157,195 @@ const getProfileAvatar = (
   return profile?.gallery?.find(uri => uri.trim()) ?? '';
 };
 
+const categoryRatesRecord = (value: Profile['categoryRates']): Record<string, number> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([category, rate]) => [category, Number(rate)] as const)
+      .filter(([category, rate]) => category.trim() && Number.isFinite(rate) && rate >= 0),
+  );
+};
+
+const hourlyRateForRequest = (
+  profile: Profile | null | undefined,
+  categoryLabel?: string | null,
+): number => {
+  if (!profile) {
+    return 50;
+  }
+
+  const requestedCategory = categoryLabel?.trim().toLowerCase();
+  if (requestedCategory) {
+    const variants = new Set([
+      requestedCategory,
+      ...getCategoryMatchVariants(categoryLabel ?? '').map(value => value.toLowerCase()),
+    ]);
+    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(
+      ([category]) => variants.has(category.trim().toLowerCase()),
+    );
+    if (matched) {
+      return matched[1];
+    }
+  }
+
+  return profile.hourlyRate ?? 50;
+};
+
+const cancellationFields = (request: {
+  cancellationFee: number;
+  cancellationFeeReason?: string | null;
+  cancelledAt?: Date | null;
+  cancelledById?: string | null;
+}) => ({
+  cancellationFee: request.cancellationFee,
+  cancellationFeeReason: request.cancellationFeeReason ?? null,
+  cancelledAt: request.cancelledAt?.toISOString() ?? null,
+  cancelledById: request.cancelledById ?? null,
+});
+
+const beneficiaryFields = (request: {
+  bookingFor?: string | null;
+  beneficiaryName?: string | null;
+  beneficiaryPhone?: string | null;
+  beneficiaryRelation?: string | null;
+  beneficiaryNote?: string | null;
+}) => ({
+  bookingFor: request.bookingFor === 'someone_else' ? 'someone_else' as const : 'self' as const,
+  beneficiaryName: request.beneficiaryName ?? null,
+  beneficiaryPhone: request.beneficiaryPhone ?? null,
+  beneficiaryRelation: request.beneficiaryRelation ?? null,
+  beneficiaryNote: request.beneficiaryNote ?? null,
+});
+
+const normalizeOptionalText = (value?: string | null): string | null => {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+};
+
+const cancellationPreviewFields = (
+  request: {
+    status: RequestStatus;
+    fromDateTime: Date;
+    categoryLabel: string;
+  },
+  receiverProfile: Profile | null | undefined,
+) => {
+  const now = Date.now();
+  const startsAt = request.fromDateTime.getTime();
+  const applies =
+    request.status === RequestStatus.CONFIRMED &&
+    now >= startsAt - LATE_CANCELLATION_WINDOW_MS &&
+    now < startsAt;
+
+  return {
+    cancellationFeeApplies: applies,
+    cancellationFeePreview: applies
+      ? hourlyRateForRequest(receiverProfile, request.categoryLabel)
+      : 0,
+  };
+};
+
+const normalizeDayKey = (value: string): string => value.trim().slice(0, 3).toUpperCase();
+
+const minutesFromTimeParts = (hourRaw: number, minute: number, marker?: string): number | null => {
+  if (!Number.isFinite(hourRaw) || !Number.isFinite(minute)) {
+    return null;
+  }
+  let hour = hourRaw;
+  const normalizedMarker = marker?.toLowerCase();
+  if (normalizedMarker === 'pm' && hour < 12) {
+    hour += 12;
+  }
+  if (normalizedMarker === 'am' && hour === 12) {
+    hour = 0;
+  }
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return hour * 60 + minute;
+};
+
+const parseAvailabilityRange = (value?: string | null): { start: number; end: number } | null => {
+  const matches = [...(value ?? '').matchAll(/(\d{1,2}):(\d{2})\s*(am|pm)?/gi)];
+  if (matches.length < 2) {
+    return null;
+  }
+  const firstMarker = matches[0][3];
+  const secondMarker = matches[1][3] ?? firstMarker;
+  const start = minutesFromTimeParts(Number(matches[0][1]), Number(matches[0][2]), firstMarker);
+  const end = minutesFromTimeParts(Number(matches[1][1]), Number(matches[1][2]), secondMarker);
+  if (start == null || end == null || start === end) {
+    return null;
+  }
+  return { start, end };
+};
+
+const minutesInDay = (date: Date): number => date.getHours() * 60 + date.getMinutes();
+
+const requestFitsAvailability = (
+  profile: Pick<Profile, 'availableDays' | 'availableTimeRange'> | null | undefined,
+  from: Date,
+  to: Date,
+): boolean => {
+  if (!profile) {
+    return true;
+  }
+
+  const days = (profile.availableDays ?? []).map(normalizeDayKey).filter(Boolean);
+  const range = parseAvailabilityRange(profile.availableTimeRange);
+  if (!days.length && !range) {
+    return true;
+  }
+
+  if (from.toDateString() !== to.toDateString()) {
+    return false;
+  }
+
+  if (days.length && !days.includes(DAY_KEYS[from.getDay()])) {
+    return false;
+  }
+
+  if (!range) {
+    return true;
+  }
+
+  const start = minutesInDay(from);
+  const end = minutesInDay(to);
+
+  if (range.end > range.start) {
+    return start >= range.start && end <= range.end;
+  }
+
+  return start >= range.start || end <= range.end;
+};
+
 export class RequestService {
+  private static async persistExpiredRequests(requests: Array<{
+    id: string;
+    status: RequestStatus;
+    toDateTime?: Date | null;
+    session?: unknown | null;
+  }>): Promise<void> {
+    const expiredIds = requests
+      .filter(shouldExpireRequest)
+      .map(request => request.id);
+
+    if (!expiredIds.length) {
+      return;
+    }
+
+    await prisma.request.updateMany({
+      where: { id: { in: expiredIds } },
+      data: {
+        status: RequestStatus.EXPIRED,
+        otp: null,
+      },
+    });
+  }
+
   public static async createRequest(senderId: string, data: CreateRequestInput): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
       throw new AppError('You cannot send a mate request to yourself', 400);
@@ -138,6 +372,28 @@ export class RequestService {
       throw new AppError('Cannot send request to a blocked user or if blocked by them', 400);
     }
 
+    if (!requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)) {
+      throw new AppError(
+        'Please choose a meeting time within this companion availability',
+        400,
+      );
+    }
+
+    const bookingFor = data.bookingFor === 'someone_else' ? 'someone_else' : 'self';
+    const beneficiaryData = bookingFor === 'someone_else'
+      ? {
+          beneficiaryName: normalizeOptionalText(data.beneficiaryName),
+          beneficiaryPhone: normalizeOptionalText(data.beneficiaryPhone),
+          beneficiaryRelation: normalizeOptionalText(data.beneficiaryRelation),
+          beneficiaryNote: normalizeOptionalText(data.beneficiaryNote),
+        }
+      : {
+          beneficiaryName: null,
+          beneficiaryPhone: null,
+          beneficiaryRelation: null,
+          beneficiaryNote: null,
+        };
+
     const newRequest = await prisma.request.create({
       data: {
         senderId,
@@ -148,6 +404,8 @@ export class RequestService {
         fromDateTime: data.fromDateTime,
         toDateTime: data.toDateTime,
         message: data.message ?? '',
+        bookingFor,
+        ...beneficiaryData,
         status: RequestStatus.PENDING,
       },
     });
@@ -165,10 +423,13 @@ export class RequestService {
       fromDateTime: newRequest.fromDateTime.toISOString(),
       toDateTime: newRequest.toDateTime.toISOString(),
       message: newRequest.message ?? '',
+      ...beneficiaryFields(newRequest),
       status: 'pending',
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
       requesterGender: null,
+      ...cancellationFields(newRequest),
+      ...cancellationPreviewFields(newRequest, receiver.profile),
     };
   }
 
@@ -187,6 +448,9 @@ export class RequestService {
       prisma.request.findMany({
         where: { receiverId: userId },
         include: {
+          receiver: {
+            include: { profile: true },
+          },
           sender: {
             include: { profile: true },
           },
@@ -195,6 +459,8 @@ export class RequestService {
         orderBy: { createdAt: 'desc' },
       }),
     ]);
+
+    await RequestService.persistExpiredRequests([...sentRequests, ...receivedRequests]);
 
     const sent = sentRequests.map((req): MappedRequest => ({
       id: req.id,
@@ -209,12 +475,18 @@ export class RequestService {
       fromDateTime: req.fromDateTime.toISOString(),
       toDateTime: req.toDateTime.toISOString(),
       message: req.message ?? '',
-      status: mapRequestStatusWithSession(req.status, req.session),
+      ...beneficiaryFields(req),
+      status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
       sentAt: formatSentAt(req.createdAt),
       sessionStatus: mapSessionStatus(req.session),
       sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
       otp: null,
       requesterGender: null,
+      ...cancellationFields(req),
+      ...cancellationPreviewFields(
+        { ...req, status: effectiveRequestStatus(req) },
+        req.receiver?.profile,
+      ),
     }));
 
     const received = receivedRequests.map((req): MappedRequest => ({
@@ -230,12 +502,18 @@ export class RequestService {
       fromDateTime: req.fromDateTime.toISOString(),
       toDateTime: req.toDateTime.toISOString(),
       message: req.message ?? '',
-      status: mapRequestStatusWithSession(req.status, req.session),
+      ...beneficiaryFields(req),
+      status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
       sentAt: formatSentAt(req.createdAt),
       sessionStatus: mapSessionStatus(req.session),
       sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
       otp: req.otp,
       requesterGender: req.sender.profile?.gender ?? null,
+      ...cancellationFields(req),
+      ...cancellationPreviewFields(
+        { ...req, status: effectiveRequestStatus(req) },
+        req.receiver?.profile,
+      ),
     }));
 
     return { sent, received };
@@ -248,15 +526,36 @@ export class RequestService {
   ): Promise<MappedRequest> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
+      include: {
+        receiver: { include: { profile: true } },
+        session: true,
+      },
     });
 
     if (!request) {
       throw new AppError('Request not found', 404);
     }
 
+    if (shouldExpireRequest(request)) {
+      await prisma.request.update({
+        where: { id: requestId },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        },
+      });
+      throw new AppError('This request has expired', 400);
+    }
+
     if (status === 'cancelled') {
       if (request.senderId !== userId) {
         throw new AppError('You are not authorized to cancel this request', 403);
+      }
+      if (request.status !== RequestStatus.PENDING && request.status !== RequestStatus.CONFIRMED) {
+        throw new AppError('Only active requests can be cancelled', 400);
+      }
+      if (request.session) {
+        throw new AppError('This meet has already started. End the session instead.', 400);
       }
     } else {
       // confirmed or declined
@@ -269,11 +568,31 @@ export class RequestService {
       ? String(Math.floor(1000 + Math.random() * 9000))
       : null;
 
+    const now = new Date();
+    const isLateCancellation =
+      status === 'cancelled' &&
+      request.status === RequestStatus.CONFIRMED &&
+      request.senderId === userId &&
+      now.getTime() >= request.fromDateTime.getTime() - LATE_CANCELLATION_WINDOW_MS &&
+      now.getTime() < request.fromDateTime.getTime();
+
+    const cancellationFee = isLateCancellation
+      ? hourlyRateForRequest(request.receiver.profile, request.categoryLabel)
+      : 0;
+
     const updatedRequest = await prisma.request.update({
       where: { id: requestId },
       data: { 
         status: mapStatusToBackend(status),
         otp: otpVal,
+        ...(status === 'cancelled'
+          ? {
+              cancelledAt: now,
+              cancelledById: userId,
+              cancellationFee,
+              cancellationFeeReason: isLateCancellation ? LATE_CANCELLATION_REASON : null,
+            }
+          : {}),
       },
       include: {
         sender: { include: { profile: true } },
@@ -300,6 +619,18 @@ export class RequestService {
         'meet_canceled',
         `${senderName} cancelled your meet`
       );
+      if (cancellationFee > 0) {
+        await NotificationService.createNotification(
+          updatedRequest.senderId,
+          'payment_sent',
+          `you paid ${cancellationFee} late cancellation fee to ${receiverName}`
+        );
+        await NotificationService.createNotification(
+          updatedRequest.receiverId,
+          'payment_received',
+          `you received ${cancellationFee} late cancellation fee from ${senderName}`
+        );
+      }
     } else if (status === 'declined') {
       await NotificationService.createNotification(
         updatedRequest.senderId,
@@ -321,10 +652,13 @@ export class RequestService {
       fromDateTime: updatedRequest.fromDateTime.toISOString(),
       toDateTime: updatedRequest.toDateTime.toISOString(),
       message: updatedRequest.message ?? '',
+      ...beneficiaryFields(updatedRequest),
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
       otp: isSender ? null : updatedRequest.otp,
       requesterGender: updatedRequest.sender.profile?.gender ?? null,
+      ...cancellationFields(updatedRequest),
+      ...cancellationPreviewFields(updatedRequest, updatedRequest.receiver.profile),
     };
   }
 
