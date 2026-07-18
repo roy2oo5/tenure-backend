@@ -22,6 +22,7 @@ export type MappedSession = {
   hourlyRate: number;
   billingAmount: number;
   lastActionBy: string | null;
+  endReason: string | null;
 };
 
 async function mapSession(session: any, currentUserId: string): Promise<MappedSession> {
@@ -95,6 +96,7 @@ async function mapSession(session: any, currentUserId: string): Promise<MappedSe
     hourlyRate,
     billingAmount,
     lastActionBy: session.lastActionBy,
+    endReason: session.endReason ?? null,
   };
 }
 
@@ -297,7 +299,11 @@ export class SessionService {
     return mapSession(updated, userId);
   }
 
-  public static async endSession(userId: string, requestId: string): Promise<MappedSession> {
+  public static async endSession(
+    userId: string,
+    requestId: string,
+    endReason?: string | null,
+  ): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -334,6 +340,7 @@ export class SessionService {
         lastTimerStart: null,
         endedAt: now,
         lastActionBy: null,
+        endReason: endReason?.trim() || session.endReason || null,
       },
     });
 

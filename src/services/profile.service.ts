@@ -17,6 +17,7 @@ export type ProfileUpsertInput = {
   about?: string | null;
   vibes?: string[] | null;
   professions?: string[] | null;
+  qualification?: string | null;
   vehicles?: string[] | null;
   interests?: string[] | null;
   availableDays?: string[] | null;
@@ -155,6 +156,7 @@ export class ProfileService {
       about: data.about ?? null,
       vibes: data.vibes ?? [],
       professions: data.professions ?? [],
+      qualification: data.qualification?.trim() || null,
       vehicles: data.vehicles ?? [],
       interests: data.interests ?? [],
       availableDays: data.availableDays ?? [],

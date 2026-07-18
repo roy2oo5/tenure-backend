@@ -1,6 +1,6 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
-import { RequestStatus } from '@prisma/client';
+import { RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
 import { sendToUser } from './websocket.service';
 
@@ -14,7 +14,7 @@ export type CreateRequestInput = {
   message?: string | null;
 };
 
-export type FrontendRequestStatus = 'pending' | 'confirmed' | 'declined' | 'cancelled' | 'expired';
+export type FrontendRequestStatus = 'pending' | 'confirmed' | 'declined' | 'cancelled' | 'expired' | 'ended';
 
 export type MappedRequest = {
   id: string;
@@ -31,6 +31,8 @@ export type MappedRequest = {
   message: string;
   status: FrontendRequestStatus;
   sentAt: string;
+  sessionStatus?: string | null;
+  sessionEndedAt?: string | null;
   otp?: string | null;
   requesterGender?: string | null;
 };
@@ -69,6 +71,34 @@ const formatSentAt = (date: Date): string => {
     hour: '2-digit',
     minute: '2-digit',
   });
+};
+
+const mapRequestStatusWithSession = (
+  status: RequestStatus,
+  session?: { status: SessionStatus; endedAt?: Date | null } | null,
+): FrontendRequestStatus => {
+  if (session?.status === SessionStatus.ENDED) {
+    return 'ended';
+  }
+  return mapStatusToFrontend(status);
+};
+
+const mapSessionStatus = (
+  session?: { status: SessionStatus } | null,
+): string | null => {
+  if (!session) return null;
+  switch (session.status) {
+    case SessionStatus.RUNNING:
+      return 'running';
+    case SessionStatus.PAUSE_REQUESTED:
+      return 'pause_requested';
+    case SessionStatus.PAUSED:
+      return 'paused';
+    case SessionStatus.RESUME_REQUESTED:
+      return 'resume_requested';
+    case SessionStatus.ENDED:
+      return 'ended';
+  }
 };
 
 const getProfileAvatar = (
@@ -150,6 +180,7 @@ export class RequestService {
           receiver: {
             include: { profile: true },
           },
+          session: true,
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -159,6 +190,7 @@ export class RequestService {
           sender: {
             include: { profile: true },
           },
+          session: true,
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -177,8 +209,10 @@ export class RequestService {
       fromDateTime: req.fromDateTime.toISOString(),
       toDateTime: req.toDateTime.toISOString(),
       message: req.message ?? '',
-      status: mapStatusToFrontend(req.status),
+      status: mapRequestStatusWithSession(req.status, req.session),
       sentAt: formatSentAt(req.createdAt),
+      sessionStatus: mapSessionStatus(req.session),
+      sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
       otp: null,
       requesterGender: null,
     }));
@@ -196,8 +230,10 @@ export class RequestService {
       fromDateTime: req.fromDateTime.toISOString(),
       toDateTime: req.toDateTime.toISOString(),
       message: req.message ?? '',
-      status: mapStatusToFrontend(req.status),
+      status: mapRequestStatusWithSession(req.status, req.session),
       sentAt: formatSentAt(req.createdAt),
+      sessionStatus: mapSessionStatus(req.session),
+      sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
       otp: req.otp,
       requesterGender: req.sender.profile?.gender ?? null,
     }));

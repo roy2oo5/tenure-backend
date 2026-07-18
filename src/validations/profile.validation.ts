@@ -24,6 +24,7 @@ export const createProfileSchema = z.object({
     about: z.string().optional().nullable(),
     vibes: stringArray,
     professions: stringArray,
+    qualification: z.string().optional().nullable(),
     vehicles: stringArray,
     interests: stringArray,
     availableDays: stringArray,
