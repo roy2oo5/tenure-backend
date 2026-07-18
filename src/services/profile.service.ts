@@ -1,5 +1,5 @@
 import { prisma } from '../config/database';
-import { Profile } from '@prisma/client';
+import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 
 export type ProfileUpsertInput = {
@@ -14,10 +14,12 @@ export type ProfileUpsertInput = {
   languages: string[];
   categories?: string[] | null;
   hourlyRate?: number | null;
+  categoryRates?: Record<string, number> | null;
   about?: string | null;
   vibes?: string[] | null;
   professions?: string[] | null;
   qualification?: string | null;
+  bloodGroup?: string | null;
   vehicles?: string[] | null;
   interests?: string[] | null;
   availableDays?: string[] | null;
@@ -67,6 +69,24 @@ function normalizeTimeRange(value?: string | null): string | null {
     .replace(/\b(am|pm)\b/g, marker => marker.toUpperCase());
 
   return normalized || null;
+}
+
+function normalizeCategoryRates(
+  rates?: Record<string, number> | null,
+): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  if (!rates) {
+    return Prisma.JsonNull;
+  }
+
+  const entries = Object.entries(rates)
+    .map(([category, rate]) => [category.trim(), Number(rate)] as const)
+    .filter(([category, rate]) => category && Number.isFinite(rate) && rate >= 0);
+
+  if (!entries.length) {
+    return Prisma.JsonNull;
+  }
+
+  return Object.fromEntries(entries);
 }
 
 export class ProfileService {
@@ -153,10 +173,12 @@ export class ProfileService {
       languages: data.languages,
       categories: data.categories ?? [],
       hourlyRate: data.hourlyRate !== undefined ? data.hourlyRate : null,
+      categoryRates: normalizeCategoryRates(data.categoryRates),
       about: data.about ?? null,
       vibes: data.vibes ?? [],
       professions: data.professions ?? [],
       qualification: data.qualification?.trim() || null,
+      bloodGroup: data.bloodGroup?.trim() || null,
       vehicles: data.vehicles ?? [],
       interests: data.interests ?? [],
       availableDays: data.availableDays ?? [],

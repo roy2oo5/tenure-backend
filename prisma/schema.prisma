@@ -52,10 +52,12 @@ model Profile {
   languages    String[]
   categories   String[]
   hourlyRate   Float?    @map("hourly_rate")
+  categoryRates Json?     @map("category_rates")
   about        String?
   vibes        String[]  @default([])
   professions  String[]  @default([])
   qualification String?
+  bloodGroup    String?   @map("blood_group")
   vehicles     String[]  @default([])
   interests    String[]  @default([])
   availableDays      String[] @default([]) @map("available_days")

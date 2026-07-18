@@ -1,6 +1,6 @@
 import { Prisma, Profile } from '@prisma/client';
 import { prisma } from '../config/database';
-import { profileMatchesCategory } from '../constants/mate-categories';
+import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
 
 export type DiscoverSearchInput = {
   q?: string;
@@ -22,8 +22,10 @@ export type DiscoverMateResult = {
   state: string;
   gender: string | null;
   dob: Date;
+  category: string;
   categories: string[];
   hourlyRate: number | null;
+  categoryRates: Record<string, number>;
   languages: string[];
   about: string | null;
   aadhaarVerified: boolean;
@@ -113,6 +115,47 @@ function matchesHourlyRate(
   }
 }
 
+function categoryRatesRecord(value: Profile['categoryRates']): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([category, rate]) => [category, Number(rate)] as const)
+      .filter(([category, rate]) => category.trim() && Number.isFinite(rate) && rate >= 0),
+  );
+}
+
+function rateForCategory(profile: Profile, category?: string | null): number | null {
+  const rates = categoryRatesRecord(profile.categoryRates);
+  const selectedCategory = category?.trim().toLowerCase();
+  if (selectedCategory) {
+    const variants = new Set([
+      selectedCategory,
+      ...getCategoryMatchVariants(category ?? '').map(value => value.toLowerCase()),
+    ]);
+    const matched = Object.entries(rates).find(
+      ([key]) => variants.has(key.trim().toLowerCase()),
+    );
+    if (matched) {
+      return matched[1];
+    }
+  }
+
+  const firstProfileCategory = profile.categories[0]?.trim().toLowerCase();
+  if (firstProfileCategory) {
+    const matched = Object.entries(rates).find(
+      ([key]) => key.trim().toLowerCase() === firstProfileCategory,
+    );
+    if (matched) {
+      return matched[1];
+    }
+  }
+
+  return profile.hourlyRate;
+}
+
 function isDiscoverableProfile(profile: Profile): boolean {
   const name = profile.fullName?.trim() ?? '';
   if (!name || name.toLowerCase() === 'anonymous' || PLACEHOLDER_NAME.test(name)) {
@@ -145,7 +188,21 @@ function matchesTextQuery(profile: Profile, rawQuery: string): boolean {
   return profile.fullName.trim().toLowerCase().startsWith(q);
 }
 
-function toDiscoverMate(profile: Profile): DiscoverMateResult {
+function displayCategory(profile: Profile, requestedCategory?: string | null): string {
+  const requested = requestedCategory?.trim().toLowerCase();
+  if (requested) {
+    return (
+      profile.categories.find(category => profileMatchesCategory([category], requested)) ??
+      profile.categories[0] ??
+      'Support'
+    );
+  }
+
+  return profile.categories[0] ?? 'Support';
+}
+
+function toDiscoverMate(profile: Profile, requestedCategory?: string | null): DiscoverMateResult {
+  const category = displayCategory(profile, requestedCategory);
   return {
     userId: profile.userId,
     tenureId: profile.tenureId,
@@ -155,8 +212,10 @@ function toDiscoverMate(profile: Profile): DiscoverMateResult {
     state: profile.state,
     gender: profile.gender,
     dob: profile.dob ?? new Date('2000-01-01'),
+    category,
     categories: profile.categories,
-    hourlyRate: profile.hourlyRate,
+    hourlyRate: rateForCategory(profile, category),
+    categoryRates: categoryRatesRecord(profile.categoryRates),
     languages: profile.languages,
     about: profile.about,
     aadhaarVerified: profile.aadhaarVerified,
@@ -221,8 +280,8 @@ export class DiscoverService {
       .filter(profile =>
         matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange),
       )
-      .filter(profile => matchesHourlyRate(profile.hourlyRate, input))
-      .map(toDiscoverMate);
+      .filter(profile => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .map(profile => toDiscoverMate(profile, input.category));
   }
 
   public static async getMatePublicProfile(
@@ -312,7 +371,7 @@ export class DiscoverService {
       .filter(profile =>
         matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange),
       )
-      .filter(profile => matchesHourlyRate(profile.hourlyRate, input))
-      .map(toDiscoverMate);
+      .filter(profile => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .map(profile => toDiscoverMate(profile, input.category));
   }
 }

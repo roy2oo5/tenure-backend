@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { UploadService } from '@/services/upload.service';
 import fs from 'fs';
-import path from 'path';
 
 // Mock fs module
 vi.mock('fs', () => ({
@@ -54,7 +53,7 @@ describe('UploadService', () => {
       vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'placeholder');
       vi.stubEnv('AWS_S3_BUCKET', 'placeholder');
 
-      const existsSyncMock = vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.existsSync).mockReturnValue(false);
       const mkdirSyncMock = vi.mocked(fs.mkdirSync);
       const writeFileSyncMock = vi.mocked(fs.writeFileSync);
 

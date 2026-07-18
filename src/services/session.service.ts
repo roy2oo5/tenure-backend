@@ -1,8 +1,9 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
-import { SessionStatus, RequestStatus } from '@prisma/client';
+import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
 import { sendToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
+import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type MappedSession = {
   id: string;
@@ -25,6 +26,43 @@ export type MappedSession = {
   endReason: string | null;
 };
 
+function categoryRatesRecord(value: Profile['categoryRates']): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([category, rate]) => [category, Number(rate)] as const)
+      .filter(([category, rate]) => category.trim() && Number.isFinite(rate) && rate >= 0),
+  );
+}
+
+function hourlyRateForRequest(
+  profile: Profile | null | undefined,
+  categoryLabel?: string | null,
+): number {
+  if (!profile) {
+    return 50;
+  }
+
+  const requestedCategory = categoryLabel?.trim().toLowerCase();
+  if (requestedCategory) {
+    const variants = new Set([
+      requestedCategory,
+      ...getCategoryMatchVariants(categoryLabel ?? '').map(value => value.toLowerCase()),
+    ]);
+    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(
+      ([category]) => variants.has(category.trim().toLowerCase()),
+    );
+    if (matched) {
+      return matched[1];
+    }
+  }
+
+  return profile.hourlyRate ?? 50;
+}
+
 async function mapSession(session: any, currentUserId: string): Promise<MappedSession> {
   const isSender = session.senderId === currentUserId;
   const partnerId = isSender ? session.receiverId : session.senderId;
@@ -43,7 +81,7 @@ async function mapSession(session: any, currentUserId: string): Promise<MappedSe
     ? partner?.profile
     : await prisma.profile.findFirst({ where: { userId: session.receiverId } });
 
-  const hourlyRate = mateProfile?.hourlyRate ?? 50;
+  const hourlyRate = hourlyRateForRequest(mateProfile, request?.categoryLabel);
 
   // Calculate dynamic elapsed time if running
   let elapsedSec = session.totalElapsedSeconds;
