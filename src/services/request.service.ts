@@ -20,7 +20,14 @@ export type CreateRequestInput = {
   beneficiaryNote?: string | null;
 };
 
-export type FrontendRequestStatus = 'pending' | 'confirmed' | 'declined' | 'cancelled' | 'expired' | 'ended';
+export type FrontendRequestStatus =
+  | 'pending'
+  | 'awaiting_sender_confirmation'
+  | 'confirmed'
+  | 'declined'
+  | 'cancelled'
+  | 'expired'
+  | 'ended';
 
 export type MappedRequest = {
   id: string;
@@ -56,13 +63,19 @@ export type MappedRequest = {
 
 const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
 const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
-const EXPIRABLE_STATUSES = [RequestStatus.PENDING, RequestStatus.CONFIRMED] as RequestStatus[];
+const EXPIRABLE_STATUSES = [
+  RequestStatus.PENDING,
+  RequestStatus.ACCEPTED_BY_RECEIVER,
+  RequestStatus.CONFIRMED,
+] as RequestStatus[];
 const DAY_KEYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
   switch (status) {
     case RequestStatus.PENDING:
       return 'pending';
+    case RequestStatus.ACCEPTED_BY_RECEIVER:
+      return 'awaiting_sender_confirmation';
     case RequestStatus.CONFIRMED:
       return 'confirmed';
     case RequestStatus.DECLINED:
@@ -74,10 +87,8 @@ const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
   }
 };
 
-const mapStatusToBackend = (status: 'confirmed' | 'declined' | 'cancelled'): RequestStatus => {
+const mapStatusToBackend = (status: 'declined' | 'cancelled'): RequestStatus => {
   switch (status) {
-    case 'confirmed':
-      return RequestStatus.CONFIRMED;
     case 'declined':
       return RequestStatus.DECLINED;
     case 'cancelled':
@@ -105,8 +116,7 @@ const mapRequestStatusWithSession = (
   return mapStatusToFrontend(status);
 };
 
-const isExpirableStatus = (status: RequestStatus): boolean =>
-  EXPIRABLE_STATUSES.includes(status);
+const isExpirableStatus = (status: RequestStatus): boolean => EXPIRABLE_STATUSES.includes(status);
 
 const shouldExpireRequest = (request: {
   status: RequestStatus;
@@ -115,9 +125,9 @@ const shouldExpireRequest = (request: {
 }): boolean => {
   return Boolean(
     isExpirableStatus(request.status) &&
-      request.toDateTime &&
-      request.toDateTime.getTime() <= Date.now() &&
-      !request.session,
+    request.toDateTime &&
+    request.toDateTime.getTime() <= Date.now() &&
+    !request.session,
   );
 };
 
@@ -129,9 +139,7 @@ const effectiveRequestStatus = (request: {
   return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
 };
 
-const mapSessionStatus = (
-  session?: { status: SessionStatus } | null,
-): string | null => {
+const mapSessionStatus = (session?: { status: SessionStatus } | null): string | null => {
   if (!session) return null;
   switch (session.status) {
     case SessionStatus.RUNNING:
@@ -154,7 +162,7 @@ const getProfileAvatar = (
   if (profilePhoto) {
     return profilePhoto;
   }
-  return profile?.gallery?.find(uri => uri.trim()) ?? '';
+  return profile?.gallery?.find((uri) => uri.trim()) ?? '';
 };
 
 const categoryRatesRecord = (value: Profile['categoryRates']): Record<string, number> => {
@@ -181,10 +189,10 @@ const hourlyRateForRequest = (
   if (requestedCategory) {
     const variants = new Set([
       requestedCategory,
-      ...getCategoryMatchVariants(categoryLabel ?? '').map(value => value.toLowerCase()),
+      ...getCategoryMatchVariants(categoryLabel ?? '').map((value) => value.toLowerCase()),
     ]);
-    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(
-      ([category]) => variants.has(category.trim().toLowerCase()),
+    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(([category]) =>
+      variants.has(category.trim().toLowerCase()),
     );
     if (matched) {
       return matched[1];
@@ -213,7 +221,7 @@ const beneficiaryFields = (request: {
   beneficiaryRelation?: string | null;
   beneficiaryNote?: string | null;
 }) => ({
-  bookingFor: request.bookingFor === 'someone_else' ? 'someone_else' as const : 'self' as const,
+  bookingFor: request.bookingFor === 'someone_else' ? ('someone_else' as const) : ('self' as const),
   beneficiaryName: request.beneficiaryName ?? null,
   beneficiaryPhone: request.beneficiaryPhone ?? null,
   beneficiaryRelation: request.beneficiaryRelation ?? null,
@@ -323,15 +331,15 @@ const requestFitsAvailability = (
 };
 
 export class RequestService {
-  private static async persistExpiredRequests(requests: Array<{
-    id: string;
-    status: RequestStatus;
-    toDateTime?: Date | null;
-    session?: unknown | null;
-  }>): Promise<void> {
-    const expiredIds = requests
-      .filter(shouldExpireRequest)
-      .map(request => request.id);
+  private static async persistExpiredRequests(
+    requests: Array<{
+      id: string;
+      status: RequestStatus;
+      toDateTime?: Date | null;
+      session?: unknown | null;
+    }>,
+  ): Promise<void> {
+    const expiredIds = requests.filter(shouldExpireRequest).map((request) => request.id);
 
     if (!expiredIds.length) {
       return;
@@ -346,7 +354,10 @@ export class RequestService {
     });
   }
 
-  public static async createRequest(senderId: string, data: CreateRequestInput): Promise<MappedRequest> {
+  public static async createRequest(
+    senderId: string,
+    data: CreateRequestInput,
+  ): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
       throw new AppError('You cannot send a mate request to yourself', 400);
     }
@@ -373,26 +384,24 @@ export class RequestService {
     }
 
     if (!requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)) {
-      throw new AppError(
-        'Please choose a meeting time within this companion availability',
-        400,
-      );
+      throw new AppError('Please choose a meeting time within this companion availability', 400);
     }
 
     const bookingFor = data.bookingFor === 'someone_else' ? 'someone_else' : 'self';
-    const beneficiaryData = bookingFor === 'someone_else'
-      ? {
-          beneficiaryName: normalizeOptionalText(data.beneficiaryName),
-          beneficiaryPhone: normalizeOptionalText(data.beneficiaryPhone),
-          beneficiaryRelation: normalizeOptionalText(data.beneficiaryRelation),
-          beneficiaryNote: normalizeOptionalText(data.beneficiaryNote),
-        }
-      : {
-          beneficiaryName: null,
-          beneficiaryPhone: null,
-          beneficiaryRelation: null,
-          beneficiaryNote: null,
-        };
+    const beneficiaryData =
+      bookingFor === 'someone_else'
+        ? {
+            beneficiaryName: normalizeOptionalText(data.beneficiaryName),
+            beneficiaryPhone: normalizeOptionalText(data.beneficiaryPhone),
+            beneficiaryRelation: normalizeOptionalText(data.beneficiaryRelation),
+            beneficiaryNote: normalizeOptionalText(data.beneficiaryNote),
+          }
+        : {
+            beneficiaryName: null,
+            beneficiaryPhone: null,
+            beneficiaryRelation: null,
+            beneficiaryNote: null,
+          };
 
     const newRequest = await prisma.request.create({
       data: {
@@ -433,7 +442,9 @@ export class RequestService {
     };
   }
 
-  public static async listUserRequests(userId: string): Promise<{ sent: MappedRequest[]; received: MappedRequest[] }> {
+  public static async listUserRequests(
+    userId: string,
+  ): Promise<{ sent: MappedRequest[]; received: MappedRequest[] }> {
     const [sentRequests, receivedRequests] = await Promise.all([
       prisma.request.findMany({
         where: { senderId: userId },
@@ -462,59 +473,63 @@ export class RequestService {
 
     await RequestService.persistExpiredRequests([...sentRequests, ...receivedRequests]);
 
-    const sent = sentRequests.map((req): MappedRequest => ({
-      id: req.id,
-      direction: 'sent',
-      mateUserId: req.receiver.id,
-      mateName: req.receiver.profile?.fullName ?? req.receiver.name ?? 'Anonymous',
-      mateTenureId: req.receiver.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: getProfileAvatar(req.receiver.profile),
-      categoryId: req.categoryId,
-      categoryLabel: req.categoryLabel,
-      meetLocation: req.meetLocation,
-      fromDateTime: req.fromDateTime.toISOString(),
-      toDateTime: req.toDateTime.toISOString(),
-      message: req.message ?? '',
-      ...beneficiaryFields(req),
-      status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
-      sentAt: formatSentAt(req.createdAt),
-      sessionStatus: mapSessionStatus(req.session),
-      sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
-      otp: null,
-      requesterGender: null,
-      ...cancellationFields(req),
-      ...cancellationPreviewFields(
-        { ...req, status: effectiveRequestStatus(req) },
-        req.receiver?.profile,
-      ),
-    }));
+    const sent = sentRequests.map(
+      (req): MappedRequest => ({
+        id: req.id,
+        direction: 'sent',
+        mateUserId: req.receiver.id,
+        mateName: req.receiver.profile?.fullName ?? req.receiver.name ?? 'Anonymous',
+        mateTenureId: req.receiver.profile?.tenureId ?? 'Not assigned',
+        mateAvatar: getProfileAvatar(req.receiver.profile),
+        categoryId: req.categoryId,
+        categoryLabel: req.categoryLabel,
+        meetLocation: req.meetLocation,
+        fromDateTime: req.fromDateTime.toISOString(),
+        toDateTime: req.toDateTime.toISOString(),
+        message: req.message ?? '',
+        ...beneficiaryFields(req),
+        status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
+        sentAt: formatSentAt(req.createdAt),
+        sessionStatus: mapSessionStatus(req.session),
+        sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
+        otp: null,
+        requesterGender: null,
+        ...cancellationFields(req),
+        ...cancellationPreviewFields(
+          { ...req, status: effectiveRequestStatus(req) },
+          req.receiver?.profile,
+        ),
+      }),
+    );
 
-    const received = receivedRequests.map((req): MappedRequest => ({
-      id: req.id,
-      direction: 'received',
-      mateUserId: req.sender.id,
-      mateName: req.sender.profile?.fullName ?? req.sender.name ?? 'Anonymous',
-      mateTenureId: req.sender.profile?.tenureId ?? 'Not assigned',
-      mateAvatar: getProfileAvatar(req.sender.profile),
-      categoryId: req.categoryId,
-      categoryLabel: req.categoryLabel,
-      meetLocation: req.meetLocation,
-      fromDateTime: req.fromDateTime.toISOString(),
-      toDateTime: req.toDateTime.toISOString(),
-      message: req.message ?? '',
-      ...beneficiaryFields(req),
-      status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
-      sentAt: formatSentAt(req.createdAt),
-      sessionStatus: mapSessionStatus(req.session),
-      sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
-      otp: req.otp,
-      requesterGender: req.sender.profile?.gender ?? null,
-      ...cancellationFields(req),
-      ...cancellationPreviewFields(
-        { ...req, status: effectiveRequestStatus(req) },
-        req.receiver?.profile,
-      ),
-    }));
+    const received = receivedRequests.map(
+      (req): MappedRequest => ({
+        id: req.id,
+        direction: 'received',
+        mateUserId: req.sender.id,
+        mateName: req.sender.profile?.fullName ?? req.sender.name ?? 'Anonymous',
+        mateTenureId: req.sender.profile?.tenureId ?? 'Not assigned',
+        mateAvatar: getProfileAvatar(req.sender.profile),
+        categoryId: req.categoryId,
+        categoryLabel: req.categoryLabel,
+        meetLocation: req.meetLocation,
+        fromDateTime: req.fromDateTime.toISOString(),
+        toDateTime: req.toDateTime.toISOString(),
+        message: req.message ?? '',
+        ...beneficiaryFields(req),
+        status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
+        sentAt: formatSentAt(req.createdAt),
+        sessionStatus: mapSessionStatus(req.session),
+        sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
+        otp: req.otp,
+        requesterGender: req.sender.profile?.gender ?? null,
+        ...cancellationFields(req),
+        ...cancellationPreviewFields(
+          { ...req, status: effectiveRequestStatus(req) },
+          req.receiver?.profile,
+        ),
+      }),
+    );
 
     return { sent, received };
   }
@@ -522,7 +537,7 @@ export class RequestService {
   public static async updateRequestStatus(
     userId: string,
     requestId: string,
-    status: 'confirmed' | 'declined' | 'cancelled'
+    status: 'confirmed' | 'declined' | 'cancelled',
   ): Promise<MappedRequest> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
@@ -551,22 +566,53 @@ export class RequestService {
       if (request.senderId !== userId) {
         throw new AppError('You are not authorized to cancel this request', 403);
       }
-      if (request.status !== RequestStatus.PENDING && request.status !== RequestStatus.CONFIRMED) {
+      if (
+        request.status !== RequestStatus.PENDING &&
+        request.status !== RequestStatus.ACCEPTED_BY_RECEIVER &&
+        request.status !== RequestStatus.CONFIRMED
+      ) {
         throw new AppError('Only active requests can be cancelled', 400);
       }
       if (request.session) {
         throw new AppError('This meet has already started. End the session instead.', 400);
       }
     } else {
-      // confirmed or declined
-      if (request.receiverId !== userId) {
-        throw new AppError('You are not authorized to accept or decline this request', 403);
+      if (status === 'declined') {
+        if (request.receiverId !== userId) {
+          throw new AppError('You are not authorized to decline this request', 403);
+        }
+        if (
+          request.status !== RequestStatus.PENDING &&
+          request.status !== RequestStatus.ACCEPTED_BY_RECEIVER
+        ) {
+          throw new AppError('Only pending requests can be declined', 400);
+        }
+      } else if (status === 'confirmed') {
+        if (request.status === RequestStatus.PENDING) {
+          if (request.receiverId !== userId) {
+            throw new AppError('You are not authorized to accept this request', 403);
+          }
+        } else if (request.status === RequestStatus.ACCEPTED_BY_RECEIVER) {
+          if (request.senderId !== userId) {
+            throw new AppError('Only the requester can give final confirmation', 403);
+          }
+        } else {
+          throw new AppError('This request cannot be confirmed right now', 400);
+        }
       }
     }
 
-    const otpVal = status === 'confirmed'
-      ? String(Math.floor(1000 + Math.random() * 9000))
-      : null;
+    const finalSenderConfirmation =
+      status === 'confirmed' &&
+      request.status === RequestStatus.ACCEPTED_BY_RECEIVER &&
+      request.senderId === userId;
+    const otpVal = finalSenderConfirmation ? String(Math.floor(1000 + Math.random() * 9000)) : null;
+    const nextStatus =
+      status === 'confirmed'
+        ? finalSenderConfirmation
+          ? RequestStatus.CONFIRMED
+          : RequestStatus.ACCEPTED_BY_RECEIVER
+        : mapStatusToBackend(status);
 
     const now = new Date();
     const isLateCancellation =
@@ -582,8 +628,8 @@ export class RequestService {
 
     const updatedRequest = await prisma.request.update({
       where: { id: requestId },
-      data: { 
-        status: mapStatusToBackend(status),
+      data: {
+        status: nextStatus,
         otp: otpVal,
         ...(status === 'cancelled'
           ? {
@@ -603,39 +649,47 @@ export class RequestService {
     const isSender = updatedRequest.senderId === userId;
     const partner = isSender ? updatedRequest.receiver : updatedRequest.sender;
 
-    const senderName = updatedRequest.sender.profile?.fullName ?? updatedRequest.sender.name ?? 'Anonymous';
-    const receiverName = updatedRequest.receiver.profile?.fullName ?? updatedRequest.receiver.name ?? 'Anonymous';
+    const senderName =
+      updatedRequest.sender.profile?.fullName ?? updatedRequest.sender.name ?? 'Anonymous';
+    const receiverName =
+      updatedRequest.receiver.profile?.fullName ?? updatedRequest.receiver.name ?? 'Anonymous';
 
     // Create notifications based on request actions
-    if (status === 'confirmed') {
+    if (status === 'confirmed' && nextStatus === RequestStatus.ACCEPTED_BY_RECEIVER) {
       await NotificationService.createNotification(
         updatedRequest.senderId,
         'request_accepted',
-        `${receiverName} accepted your request`
+        `${receiverName} accepted your request. Please confirm to generate the OTP.`,
+      );
+    } else if (status === 'confirmed') {
+      await NotificationService.createNotification(
+        updatedRequest.receiverId,
+        'request_accepted',
+        `${senderName} confirmed the request. OTP is ready.`,
       );
     } else if (status === 'cancelled') {
       await NotificationService.createNotification(
         updatedRequest.receiverId,
         'meet_canceled',
-        `${senderName} cancelled your meet`
+        `${senderName} cancelled your meet`,
       );
       if (cancellationFee > 0) {
         await NotificationService.createNotification(
           updatedRequest.senderId,
           'payment_sent',
-          `you paid ${cancellationFee} late cancellation fee to ${receiverName}`
+          `you paid ${cancellationFee} late cancellation fee to ${receiverName}`,
         );
         await NotificationService.createNotification(
           updatedRequest.receiverId,
           'payment_received',
-          `you received ${cancellationFee} late cancellation fee from ${senderName}`
+          `you received ${cancellationFee} late cancellation fee from ${senderName}`,
         );
       }
     } else if (status === 'declined') {
       await NotificationService.createNotification(
         updatedRequest.senderId,
         'meet_canceled',
-        `${receiverName} declined your request`
+        `${receiverName} declined your request`,
       );
     }
 
@@ -680,7 +734,7 @@ export class RequestService {
       orderBy: { createdAt: 'asc' },
     });
 
-    return messages.map(msg => ({
+    return messages.map((msg) => ({
       id: msg.id,
       sender: msg.senderId === userId ? 'me' : 'them',
       type: msg.type,
@@ -733,4 +787,3 @@ export class RequestService {
     });
   }
 }
-

@@ -28,4 +28,16 @@ export class UploadController {
       next(error);
     }
   }
+
+  public static async getUploadedFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { key } = req.params;
+      const file = await UploadService.getFile(key);
+      res.setHeader('Content-Type', file.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      file.stream.pipe(res);
+    } catch (error) {
+      next(error);
+    }
+  }
 }

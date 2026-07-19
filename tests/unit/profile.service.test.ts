@@ -187,6 +187,60 @@ describe('ProfileService', () => {
       });
       expect(result).toEqual(mockResponse);
     });
+
+    it('should store category rates only for selected categories', async () => {
+      const mockProfileData = {
+        profilePhoto: 'https://example.com/photo.jpg',
+        fullName: 'Jane Doe',
+        dob: new Date('1995-12-15'),
+        gender: 'female',
+        country: 'India',
+        state: 'Karnataka',
+        district: 'Bangalore',
+        pinCode: '560001',
+        languages: ['English'],
+        categories: ['Hospital support', 'Shopping support'],
+        hourlyRate: 100,
+        categoryRates: {
+          'Hospital support': 150,
+          'Shopping support': 200,
+          'Gym support': 999,
+          '': 50,
+        },
+      };
+
+      const expectedCategoryRates = {
+        'Hospital support': 150,
+        'Shopping support': 200,
+      };
+      const mockResponse = {
+        id: 'profile-id-123',
+        userId: 'user-id-123',
+        tenureId: 'AB123',
+        ...mockProfileData,
+        categoryRates: expectedCategoryRates,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.profile.findUnique as any).mockResolvedValue(null);
+      (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
+
+      await ProfileService.upsertProfile('user-id-123', mockProfileData);
+
+      expect(prisma.profile.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            categories: ['Hospital support', 'Shopping support'],
+            categoryRates: expectedCategoryRates,
+          }),
+          create: expect.objectContaining({
+            categories: ['Hospital support', 'Shopping support'],
+            categoryRates: expectedCategoryRates,
+          }),
+        }),
+      );
+    });
   });
 
   describe('getProfile', () => {

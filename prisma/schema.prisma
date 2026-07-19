@@ -95,6 +95,7 @@ model Profile {
 
 enum RequestStatus {
   PENDING
+  ACCEPTED_BY_RECEIVER
   CONFIRMED
   DECLINED
   CANCELLED

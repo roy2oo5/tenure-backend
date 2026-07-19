@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const stringArray = z.array(z.string().min(1)).optional().nullable();
+const MAX_HOURLY_RATE = 1199;
 
 export const createProfileSchema = z.object({
   body: z.object({
@@ -11,17 +12,32 @@ export const createProfileSchema = z.object({
       z.date({
         required_error: 'Date of birth is required',
         invalid_type_error: 'Invalid date of birth format',
-      })
+      }),
     ),
     gender: z.string().min(1, 'Gender is required'),
     country: z.string().min(1, 'Country is required'),
     state: z.string().min(1, 'State is required'),
     district: z.string().min(1, 'District is required'),
     pinCode: z.string().min(1, 'PIN Code is required'),
-    languages: z.array(z.string().min(1, 'Language cannot be empty')).min(1, 'At least one language is required'),
+    languages: z
+      .array(z.string().min(1, 'Language cannot be empty'))
+      .min(1, 'At least one language is required'),
     categories: z.array(z.string().min(1, 'Category name cannot be empty')).optional().nullable(),
-    hourlyRate: z.number().min(0, 'Hourly rate must be a non-negative number').optional().nullable(),
-    categoryRates: z.record(z.number().min(0, 'Category rate must be a non-negative number')).optional().nullable(),
+    hourlyRate: z
+      .number()
+      .min(0, 'Hourly rate must be a non-negative number')
+      .max(MAX_HOURLY_RATE, `Hourly rate must be ${MAX_HOURLY_RATE} or less`)
+      .optional()
+      .nullable(),
+    categoryRates: z
+      .record(
+        z
+          .number()
+          .positive('Category rate must be greater than zero')
+          .max(MAX_HOURLY_RATE, `Category rate must be ${MAX_HOURLY_RATE} or less`),
+      )
+      .optional()
+      .nullable(),
     about: z.string().optional().nullable(),
     vibes: stringArray,
     professions: stringArray,
@@ -42,15 +58,12 @@ export const createProfileSchema = z.object({
     youtube: z.string().optional().nullable(),
     website: z.string().optional().nullable(),
     instantAvailable: z.boolean().optional(),
-    instantAvailableUntil: z.preprocess(
-      (arg) => {
-        if (arg === null || arg === undefined || arg === '') {
-          return null;
-        }
-        return typeof arg === 'string' ? new Date(arg) : arg;
-      },
-      z.date().optional().nullable()
-    ),
+    instantAvailableUntil: z.preprocess((arg) => {
+      if (arg === null || arg === undefined || arg === '') {
+        return null;
+      }
+      return typeof arg === 'string' ? new Date(arg) : arg;
+    }, z.date().optional().nullable()),
     instantCategories: stringArray,
     instantNote: z.string().optional().nullable(),
     aadhaarVerified: z.boolean().optional(),

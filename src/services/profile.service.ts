@@ -55,32 +55,34 @@ function normalizeTimeRange(value?: string | null): string | null {
   }
 
   const normalized = value
-    .replace(
-      /(?:\u0393\u00c7\u00f4|\u00e2\u20ac\u201c|\u2013|\u2014)/g,
-      '-'
-    )
-    .replace(
-      /(?:\u0393\u00c7\u00d6|\u00e2\u20ac\u2122|\u2019|\u2018|\u202f|\u00a0)/g,
-      ' '
-    )
+    .replace(/(?:\u0393\u00c7\u00f4|\u00e2\u20ac\u201c|\u2013|\u2014)/g, '-')
+    .replace(/(?:\u0393\u00c7\u00d6|\u00e2\u20ac\u2122|\u2019|\u2018|\u202f|\u00a0)/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/\s*-\s*/g, ' - ')
     .trim()
-    .replace(/\b(am|pm)\b/g, marker => marker.toUpperCase());
+    .replace(/\b(am|pm)\b/g, (marker) => marker.toUpperCase());
 
   return normalized || null;
 }
 
 function normalizeCategoryRates(
+  categories: string[],
   rates?: Record<string, number> | null,
 ): Prisma.InputJsonValue | typeof Prisma.JsonNull {
   if (!rates) {
     return Prisma.JsonNull;
   }
 
+  const selectedCategories = new Set(categories.map((category) => category.trim()).filter(Boolean));
+  if (!selectedCategories.size || selectedCategories.has('Open to any')) {
+    return Prisma.JsonNull;
+  }
+
   const entries = Object.entries(rates)
     .map(([category, rate]) => [category.trim(), Number(rate)] as const)
-    .filter(([category, rate]) => category && Number.isFinite(rate) && rate >= 0);
+    .filter(
+      ([category, rate]) => selectedCategories.has(category) && Number.isFinite(rate) && rate > 0,
+    );
 
   if (!entries.length) {
     return Prisma.JsonNull;
@@ -93,10 +95,7 @@ export class ProfileService {
   /**
    * Upsert a user profile (create if not exists, update if exists)
    */
-  public static async upsertProfile(
-    userId: string,
-    data: ProfileUpsertInput
-  ): Promise<Profile> {
+  public static async upsertProfile(userId: string, data: ProfileUpsertInput): Promise<Profile> {
     const existingProfile = await prisma.profile.findUnique({
       where: { userId },
       select: {
@@ -118,48 +117,46 @@ export class ProfileService {
     const instantAvailable =
       data.instantAvailable !== undefined
         ? data.instantAvailable
-        : existingProfile?.instantAvailable ?? false;
+        : (existingProfile?.instantAvailable ?? false);
     const instantAvailableUntil =
       data.instantAvailableUntil !== undefined
         ? data.instantAvailableUntil
-        : existingProfile?.instantAvailableUntil ?? null;
+        : (existingProfile?.instantAvailableUntil ?? null);
     const instantCategories =
       data.instantCategories !== undefined
-        ? data.instantCategories ?? []
-        : existingProfile?.instantCategories ?? [];
+        ? (data.instantCategories ?? [])
+        : (existingProfile?.instantCategories ?? []);
     const instantNote =
       data.instantNote !== undefined
         ? data.instantNote?.trim() || null
-        : existingProfile?.instantNote ?? null;
+        : (existingProfile?.instantNote ?? null);
 
     const profileVisibility =
       data.profileVisibility !== undefined
         ? data.profileVisibility
-        : existingProfile?.profileVisibility ?? true;
+        : (existingProfile?.profileVisibility ?? true);
     const notifyRequests =
       data.notifyRequests !== undefined
         ? data.notifyRequests
-        : existingProfile?.notifyRequests ?? true;
+        : (existingProfile?.notifyRequests ?? true);
     const notifyChat =
-      data.notifyChat !== undefined
-        ? data.notifyChat
-        : existingProfile?.notifyChat ?? true;
+      data.notifyChat !== undefined ? data.notifyChat : (existingProfile?.notifyChat ?? true);
     const notifyReminders =
       data.notifyReminders !== undefined
         ? data.notifyReminders
-        : existingProfile?.notifyReminders ?? true;
+        : (existingProfile?.notifyReminders ?? true);
     const emergencyName =
       data.emergencyName !== undefined
         ? data.emergencyName?.trim() || null
-        : existingProfile?.emergencyName ?? null;
+        : (existingProfile?.emergencyName ?? null);
     const emergencyPhone =
       data.emergencyPhone !== undefined
         ? data.emergencyPhone?.trim() || null
-        : existingProfile?.emergencyPhone ?? null;
+        : (existingProfile?.emergencyPhone ?? null);
     const emergencyRelation =
       data.emergencyRelation !== undefined
         ? data.emergencyRelation?.trim() || null
-        : existingProfile?.emergencyRelation ?? null;
+        : (existingProfile?.emergencyRelation ?? null);
 
     const formattedData = {
       profilePhoto: data.profilePhoto ?? null,
@@ -173,7 +170,7 @@ export class ProfileService {
       languages: data.languages,
       categories: data.categories ?? [],
       hourlyRate: data.hourlyRate !== undefined ? data.hourlyRate : null,
-      categoryRates: normalizeCategoryRates(data.categoryRates),
+      categoryRates: normalizeCategoryRates(data.categories ?? [], data.categoryRates),
       about: data.about ?? null,
       vibes: data.vibes ?? [],
       professions: data.professions ?? [],

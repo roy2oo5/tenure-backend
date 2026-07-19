@@ -42,7 +42,7 @@ describe('RequestService', () => {
           meetLocation: 'Library',
           fromDateTime: new Date(),
           toDateTime: new Date(),
-        })
+        }),
       ).rejects.toThrow('You cannot send a mate request to yourself');
     });
 
@@ -57,7 +57,7 @@ describe('RequestService', () => {
           meetLocation: 'Library',
           fromDateTime: new Date(),
           toDateTime: new Date(),
-        })
+        }),
       ).rejects.toThrow('The target companion user does not exist');
     });
 
@@ -188,11 +188,11 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
       await expect(
-        RequestService.updateRequestStatus('user-id-1', 'invalid-id', 'confirmed')
+        RequestService.updateRequestStatus('user-id-1', 'invalid-id', 'confirmed'),
       ).rejects.toThrow('Request not found');
     });
 
-    it('should throw an error if sender tries to accept or decline', async () => {
+    it('should throw an error if sender tries to accept a pending request', async () => {
       const mockRequest = {
         id: 'req-id-123',
         senderId: 'user-id-1',
@@ -203,8 +203,8 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        RequestService.updateRequestStatus('user-id-1', 'req-id-123', 'confirmed')
-      ).rejects.toThrow('You are not authorized to accept or decline this request');
+        RequestService.updateRequestStatus('user-id-1', 'req-id-123', 'confirmed'),
+      ).rejects.toThrow('You are not authorized to accept this request');
     });
 
     it('should throw an error if receiver tries to cancel', async () => {
@@ -218,11 +218,11 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        RequestService.updateRequestStatus('user-id-2', 'req-id-123', 'cancelled')
+        RequestService.updateRequestStatus('user-id-2', 'req-id-123', 'cancelled'),
       ).rejects.toThrow('You are not authorized to cancel this request');
     });
 
-    it('should successfully update status when valid', async () => {
+    it('should mark request as waiting for sender confirmation when receiver accepts', async () => {
       const mockRequest = {
         id: 'req-id-123',
         senderId: 'user-id-1',
@@ -238,7 +238,8 @@ describe('RequestService', () => {
 
       const mockUpdated = {
         ...mockRequest,
-        status: RequestStatus.CONFIRMED,
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        otp: null,
         createdAt: new Date(),
         sender: {
           id: 'user-id-1',
@@ -263,11 +264,80 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus('user-id-2', 'req-id-123', 'confirmed');
+      const result = await RequestService.updateRequestStatus(
+        'user-id-2',
+        'req-id-123',
+        'confirmed',
+      );
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 'req-id-123' },
-        data: { 
+        data: {
+          status: RequestStatus.ACCEPTED_BY_RECEIVER,
+          otp: null,
+        },
+        include: {
+          sender: { include: { profile: true } },
+          receiver: { include: { profile: true } },
+        },
+      });
+      expect(result.status).toBe('awaiting_sender_confirmation');
+      expect(result.direction).toBe('received');
+      expect(result.mateUserId).toBe('user-id-1');
+      expect(result.mateName).toBe('Sender Profile');
+    });
+
+    it('should generate otp when sender gives final confirmation', async () => {
+      const mockRequest = {
+        id: 'req-id-123',
+        senderId: 'user-id-1',
+        receiverId: 'user-id-2',
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        message: 'Let us study together',
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+      };
+
+      const mockUpdated = {
+        ...mockRequest,
+        status: RequestStatus.CONFIRMED,
+        otp: '1234',
+        createdAt: new Date(),
+        sender: {
+          id: 'user-id-1',
+          name: 'Sender name',
+          profile: {
+            fullName: 'Sender Profile',
+            tenureId: 'TN111',
+            profilePhoto: '',
+          },
+        },
+        receiver: {
+          id: 'user-id-2',
+          name: 'Receiver name',
+          profile: {
+            fullName: 'Receiver Profile',
+            tenureId: 'TN222',
+            profilePhoto: '',
+          },
+        },
+      };
+
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.request.update as any).mockResolvedValue(mockUpdated);
+
+      const result = await RequestService.updateRequestStatus(
+        'user-id-1',
+        'req-id-123',
+        'confirmed',
+      );
+
+      expect(prisma.request.update).toHaveBeenCalledWith({
+        where: { id: 'req-id-123' },
+        data: {
           status: RequestStatus.CONFIRMED,
           otp: expect.any(String),
         },
@@ -277,9 +347,8 @@ describe('RequestService', () => {
         },
       });
       expect(result.status).toBe('confirmed');
-      expect(result.direction).toBe('received');
-      expect(result.mateUserId).toBe('user-id-1');
-      expect(result.mateName).toBe('Sender Profile');
+      expect(result.direction).toBe('sent');
+      expect(result.otp).toBeNull();
     });
 
     it('should charge one hour when sender cancels a confirmed request within 1 hour of start', async () => {
@@ -391,9 +460,9 @@ describe('RequestService', () => {
     it('should throw an error if request does not exist', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        RequestService.getRequestMessages('user-id-1', 'req-invalid')
-      ).rejects.toThrow('Request not found');
+      await expect(RequestService.getRequestMessages('user-id-1', 'req-invalid')).rejects.toThrow(
+        'Request not found',
+      );
     });
 
     it('should throw an error if user is not part of the request', async () => {
@@ -406,7 +475,7 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        RequestService.getRequestMessages('user-id-unauthorized', 'req-id-123')
+        RequestService.getRequestMessages('user-id-unauthorized', 'req-id-123'),
       ).rejects.toThrow('You are not authorized to view messages for this request');
     });
 

@@ -1,7 +1,9 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import path from 'path';
 import fs from 'fs';
+import { Readable } from 'stream';
 import { logger } from '../utils/logger';
+import { AppError } from '../utils/app-error';
 
 // Check if S3 credentials are set and are not placeholder
 const hasS3Config =
@@ -49,7 +51,6 @@ export class UploadService {
     // 1. Attempt S3 Upload if client exists
     if (s3Client && process.env.AWS_S3_BUCKET) {
       const bucketName = process.env.AWS_S3_BUCKET;
-      const region = process.env.AWS_REGION || 'us-east-1';
 
       try {
         // Try uploading with public-read ACL first
@@ -77,7 +78,10 @@ export class UploadService {
         }
 
         logger.info(`Successfully uploaded ${fileName} to AWS S3`);
-        return `https://${bucketName}.s3.${region}.amazonaws.com/${fileName}`;
+        if (reqHost && reqProtocol) {
+          return `${reqProtocol}://${reqHost}/api/upload/media/${encodeURIComponent(fileName)}`;
+        }
+        return `/api/upload/media/${encodeURIComponent(fileName)}`;
       } catch (error: any) {
         logger.error(`S3 upload failed completely: ${error.message}. Falling back to local storage.`);
       }
@@ -109,5 +113,58 @@ export class UploadService {
       logger.error(`Local fallback file saving failed: ${localError.message}`);
       throw localError;
     }
+  }
+
+  public static async getFile(
+    rawKey: string
+  ): Promise<{ stream: Readable; contentType: string }> {
+    const key = UploadService.normalizeUploadedKey(rawKey);
+
+    if (s3Client && process.env.AWS_S3_BUCKET) {
+      const response = await s3Client.send(
+        new GetObjectCommand({
+          Bucket: process.env.AWS_S3_BUCKET,
+          Key: key,
+        })
+      );
+      if (!response.Body || !(response.Body instanceof Readable)) {
+        throw new AppError('Uploaded file not found', 404);
+      }
+      return {
+        stream: response.Body,
+        contentType: response.ContentType ?? UploadService.contentTypeForKey(key),
+      };
+    }
+
+    const basename = path.basename(key);
+    const localFilePath = path.join(__dirname, '../../public/uploads', basename);
+    if (!fs.existsSync(localFilePath)) {
+      throw new AppError('Uploaded file not found', 404);
+    }
+    return {
+      stream: fs.createReadStream(localFilePath),
+      contentType: UploadService.contentTypeForKey(key),
+    };
+  }
+
+  private static normalizeUploadedKey(rawKey: string): string {
+    const decoded = decodeURIComponent(rawKey).replace(/\\/g, '/');
+    const normalized = path.posix.normalize(decoded);
+    if (
+      normalized.startsWith('../') ||
+      normalized.includes('/../') ||
+      !normalized.startsWith('uploads/')
+    ) {
+      throw new AppError('Invalid uploaded file path', 400);
+    }
+    return normalized;
+  }
+
+  private static contentTypeForKey(key: string): string {
+    const lower = key.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    return 'image/jpeg';
   }
 }
