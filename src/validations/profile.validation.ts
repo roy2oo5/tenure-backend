@@ -19,6 +19,8 @@ export const createProfileSchema = z.object({
     state: z.string().min(1, 'State is required'),
     district: z.string().min(1, 'District is required'),
     pinCode: z.string().min(1, 'PIN Code is required'),
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
     languages: z
       .array(z.string().min(1, 'Language cannot be empty'))
       .min(1, 'At least one language is required'),

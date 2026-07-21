@@ -3,7 +3,7 @@ import { z } from 'zod';
 const optionalNumber = z
   .union([z.string(), z.number()])
   .optional()
-  .transform(value => {
+  .transform((value) => {
     if (value === undefined || value === null || value === '') {
       return undefined;
     }
@@ -16,11 +16,13 @@ export const discoverSearchSchema = z.object({
     q: z.string().optional(),
     district: z.string().optional(),
     category: z.string().optional(),
+    latitude: optionalNumber,
+    longitude: optionalNumber,
+    currentLatitude: optionalNumber,
+    currentLongitude: optionalNumber,
     gender: z.enum(['all', 'male', 'female']).optional(),
     ageRange: z.enum(['all', 'under30', '30to45', 'over45']).optional(),
-    hourlyRateRange: z
-      .enum(['all', 'under70', '70to200', '200to300', 'custom'])
-      .optional(),
+    hourlyRateRange: z.enum(['all', 'under70', '70to200', '200to300', 'custom']).optional(),
     customHourlyRateMin: optionalNumber,
     customHourlyRateMax: optionalNumber,
   }),

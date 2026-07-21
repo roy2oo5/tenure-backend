@@ -26,6 +26,8 @@ describe('DiscoverService', () => {
         profilePhoto: 'https://example.com/a.jpg',
         district: 'Bangalore',
         state: 'Karnataka',
+        latitude: 12.9716,
+        longitude: 77.5946,
         gender: 'Woman',
         dob: new Date('1998-01-01'),
         categories: ['Travel Mate'],
@@ -115,5 +117,98 @@ describe('DiscoverService', () => {
     });
     expect(byLabel).toHaveLength(1);
     expect(byLabel[0].fullName).toBe('Food User');
+  });
+
+  it('lists instant mates while ready now is enabled without requiring an expiry time', async () => {
+    const profiles = [
+      {
+        userId: 'ready-user',
+        tenureId: 'IN123',
+        fullName: 'Ready User',
+        profilePhoto: 'https://example.com/ready.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Woman',
+        dob: new Date('1998-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 120,
+        categoryRates: {},
+        languages: ['English'],
+        about: 'Ready now',
+        availableDays: [],
+        availableTimeRange: null,
+        bestTime: null,
+        aadhaarVerified: true,
+        gallery: [],
+        instagram: null,
+        facebook: null,
+        youtube: null,
+        website: null,
+        instantAvailable: true,
+        instantAvailableUntil: null,
+        instantCategories: [],
+        instantNote: null,
+      },
+    ];
+
+    (prisma.profile.findMany as any).mockResolvedValue(profiles);
+
+    const results = await DiscoverService.getInstantMates('current-user', {});
+
+    expect(prisma.profile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.not.objectContaining({
+          instantAvailableUntil: expect.anything(),
+        }),
+      }),
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].fullName).toBe('Ready User');
+    expect(results[0].instantAvailable).toBe(true);
+  });
+
+  it('returns distance from the searching user when coordinates are provided', async () => {
+    const profiles = [
+      {
+        userId: 'near-user',
+        tenureId: 'NE123',
+        fullName: 'Near User',
+        profilePhoto: 'https://example.com/near.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        latitude: 12.9716,
+        longitude: 77.5946,
+        gender: 'Man',
+        dob: new Date('1997-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 100,
+        categoryRates: {},
+        languages: ['English'],
+        about: null,
+        availableDays: [],
+        availableTimeRange: null,
+        bestTime: null,
+        aadhaarVerified: true,
+        gallery: [],
+        instagram: null,
+        facebook: null,
+        youtube: null,
+        website: null,
+        instantAvailable: false,
+        instantAvailableUntil: null,
+        instantCategories: [],
+        instantNote: null,
+      },
+    ];
+
+    (prisma.profile.findMany as any).mockResolvedValue(profiles);
+
+    const results = await DiscoverService.searchMates('current-user', {
+      latitude: 12.9716,
+      longitude: 77.5946,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].distanceKm).toBe(0);
   });
 });

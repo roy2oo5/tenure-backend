@@ -6,6 +6,8 @@ export type DiscoverSearchInput = {
   q?: string;
   district?: string | null;
   category?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   gender?: 'all' | 'male' | 'female';
   ageRange?: 'all' | 'under30' | '30to45' | 'over45';
   hourlyRateRange?: 'all' | 'under70' | '70to200' | '200to300' | 'custom';
@@ -41,6 +43,7 @@ export type DiscoverMateResult = {
   instantAvailableUntil: Date | null;
   instantCategories: string[];
   instantNote: string | null;
+  distanceKm: number | null;
 };
 
 const PLACEHOLDER_NAME = /^user\s+\d{10}$/i;
@@ -89,10 +92,7 @@ function matchesAgeRange(dob: Date, ageRange: DiscoverSearchInput['ageRange']): 
   }
 }
 
-function matchesHourlyRate(
-  rate: number | null,
-  input: DiscoverSearchInput,
-): boolean {
+function matchesHourlyRate(rate: number | null, input: DiscoverSearchInput): boolean {
   const hourlyRate = rate ?? 0;
   const { hourlyRateRange, customHourlyRateMin, customHourlyRateMax } = input;
 
@@ -118,6 +118,46 @@ function matchesHourlyRate(
   }
 }
 
+function isValidCoordinate(latitude?: number | null, longitude?: number | null): boolean {
+  return (
+    typeof latitude === 'number' &&
+    Number.isFinite(latitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    typeof longitude === 'number' &&
+    Number.isFinite(longitude) &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+function distanceKmBetween(
+  fromLatitude?: number | null,
+  fromLongitude?: number | null,
+  toLatitude?: number | null,
+  toLongitude?: number | null,
+): number | null {
+  if (
+    !isValidCoordinate(fromLatitude, fromLongitude) ||
+    !isValidCoordinate(toLatitude, toLongitude)
+  ) {
+    return null;
+  }
+
+  const earthRadiusKm = 6371;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const deltaLatitude = toRadians(toLatitude! - fromLatitude!);
+  const deltaLongitude = toRadians(toLongitude! - fromLongitude!);
+  const fromLatRad = toRadians(fromLatitude!);
+  const toLatRad = toRadians(toLatitude!);
+  const a =
+    Math.sin(deltaLatitude / 2) ** 2 +
+    Math.cos(fromLatRad) * Math.cos(toLatRad) * Math.sin(deltaLongitude / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return Math.round(earthRadiusKm * c * 10) / 10;
+}
+
 function categoryRatesRecord(value: Profile['categoryRates']): Record<string, number> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
@@ -136,11 +176,9 @@ function rateForCategory(profile: Profile, category?: string | null): number | n
   if (selectedCategory) {
     const variants = new Set([
       selectedCategory,
-      ...getCategoryMatchVariants(category ?? '').map(value => value.toLowerCase()),
+      ...getCategoryMatchVariants(category ?? '').map((value) => value.toLowerCase()),
     ]);
-    const matched = Object.entries(rates).find(
-      ([key]) => variants.has(key.trim().toLowerCase()),
-    );
+    const matched = Object.entries(rates).find(([key]) => variants.has(key.trim().toLowerCase()));
     if (matched) {
       return matched[1];
     }
@@ -178,7 +216,7 @@ function getProfileAvatar(profile: Profile): string | null {
   if (profilePhoto) {
     return profilePhoto;
   }
-  return profile.gallery.find(uri => uri.trim()) ?? null;
+  return profile.gallery.find((uri) => uri.trim()) ?? null;
 }
 
 function matchesTextQuery(profile: Profile, rawQuery: string): boolean {
@@ -195,7 +233,7 @@ function displayCategory(profile: Profile, requestedCategory?: string | null): s
   const requested = requestedCategory?.trim().toLowerCase();
   if (requested) {
     return (
-      profile.categories.find(category => profileMatchesCategory([category], requested)) ??
+      profile.categories.find((category) => profileMatchesCategory([category], requested)) ??
       profile.categories[0] ??
       'Support'
     );
@@ -204,8 +242,8 @@ function displayCategory(profile: Profile, requestedCategory?: string | null): s
   return profile.categories[0] ?? 'Support';
 }
 
-function toDiscoverMate(profile: Profile, requestedCategory?: string | null): DiscoverMateResult {
-  const category = displayCategory(profile, requestedCategory);
+function toDiscoverMate(profile: Profile, input: DiscoverSearchInput = {}): DiscoverMateResult {
+  const category = displayCategory(profile, input.category);
   return {
     userId: profile.userId,
     tenureId: profile.tenureId,
@@ -234,6 +272,12 @@ function toDiscoverMate(profile: Profile, requestedCategory?: string | null): Di
     instantAvailableUntil: profile.instantAvailableUntil,
     instantCategories: profile.instantCategories,
     instantNote: profile.instantNote,
+    distanceKm: distanceKmBetween(
+      input.latitude,
+      input.longitude,
+      profile.latitude,
+      profile.longitude,
+    ),
   };
 }
 
@@ -244,10 +288,7 @@ export class DiscoverService {
   ): Promise<DiscoverMateResult[]> {
     const blocks = await prisma.block.findMany({
       where: {
-        OR: [
-          { blockerId: currentUserId },
-          { blockedId: currentUserId },
-        ],
+        OR: [{ blockerId: currentUserId }, { blockedId: currentUserId }],
       },
       select: {
         blockerId: true,
@@ -255,7 +296,7 @@ export class DiscoverService {
       },
     });
     const blockedUserIds = blocks.map((b) =>
-      b.blockerId === currentUserId ? b.blockedId : b.blockerId
+      b.blockerId === currentUserId ? b.blockedId : b.blockerId,
     );
 
     const where: Prisma.ProfileWhereInput = {
@@ -280,14 +321,12 @@ export class DiscoverService {
 
     return profiles
       .filter(isDiscoverableProfile)
-      .filter(profile => profileMatchesCategory(profile.categories, input.category))
-      .filter(profile => matchesTextQuery(profile, input.q ?? ''))
-      .filter(profile => matchesGender(profile.gender, input.gender ?? 'all'))
-      .filter(profile =>
-        matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange),
-      )
-      .filter(profile => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map(profile => toDiscoverMate(profile, input.category));
+      .filter((profile) => profileMatchesCategory(profile.categories, input.category))
+      .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
+      .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
+      .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .map((profile) => toDiscoverMate(profile, input));
   }
 
   public static async getMatePublicProfile(
@@ -333,10 +372,7 @@ export class DiscoverService {
   ): Promise<DiscoverMateResult[]> {
     const blocks = await prisma.block.findMany({
       where: {
-        OR: [
-          { blockerId: currentUserId },
-          { blockedId: currentUserId },
-        ],
+        OR: [{ blockerId: currentUserId }, { blockedId: currentUserId }],
       },
       select: {
         blockerId: true,
@@ -344,7 +380,7 @@ export class DiscoverService {
       },
     });
     const blockedUserIds = blocks.map((b) =>
-      b.blockerId === currentUserId ? b.blockedId : b.blockerId
+      b.blockerId === currentUserId ? b.blockedId : b.blockerId,
     );
 
     const where: Prisma.ProfileWhereInput = {
@@ -353,7 +389,6 @@ export class DiscoverService {
       },
       profileVisibility: true,
       instantAvailable: true,
-      instantAvailableUntil: { gt: new Date() },
       categories: { isEmpty: false },
       user: {
         isActive: true,
@@ -366,18 +401,16 @@ export class DiscoverService {
 
     const profiles = await prisma.profile.findMany({
       where,
-      orderBy: [{ instantAvailableUntil: 'asc' }, { updatedAt: 'desc' }],
+      orderBy: { updatedAt: 'desc' },
     });
 
     return profiles
       .filter(isDiscoverableProfile)
-      .filter(profile => profileMatchesCategory(profile.categories, input.category))
-      .filter(profile => matchesTextQuery(profile, input.q ?? ''))
-      .filter(profile => matchesGender(profile.gender, input.gender ?? 'all'))
-      .filter(profile =>
-        matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange),
-      )
-      .filter(profile => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map(profile => toDiscoverMate(profile, input.category));
+      .filter((profile) => profileMatchesCategory(profile.categories, input.category))
+      .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
+      .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
+      .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .map((profile) => toDiscoverMate(profile, input));
   }
 }

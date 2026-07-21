@@ -11,6 +11,8 @@ export type ProfileUpsertInput = {
   state: string;
   district: string;
   pinCode: string;
+  latitude?: number | null;
+  longitude?: number | null;
   languages: string[];
   categories?: string[] | null;
   hourlyRate?: number | null;
@@ -167,6 +169,8 @@ export class ProfileService {
       state: data.state,
       district: data.district,
       pinCode: data.pinCode,
+      latitude: data.latitude ?? null,
+      longitude: data.longitude ?? null,
       languages: data.languages,
       categories: data.categories ?? [],
       hourlyRate: data.hourlyRate !== undefined ? data.hourlyRate : null,
@@ -287,4 +291,3 @@ export class ProfileService {
     });
   }
 }
-

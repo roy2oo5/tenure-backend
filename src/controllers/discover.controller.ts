@@ -8,13 +8,20 @@ export class DiscoverController {
       q: req.query.q as string | undefined,
       district: req.query.district as string | undefined,
       category: req.query.category as string | undefined,
+      latitude:
+        req.query.latitude != null
+          ? Number(req.query.latitude)
+          : req.query.currentLatitude != null
+            ? Number(req.query.currentLatitude)
+            : undefined,
+      longitude:
+        req.query.longitude != null
+          ? Number(req.query.longitude)
+          : req.query.currentLongitude != null
+            ? Number(req.query.currentLongitude)
+            : undefined,
       gender: req.query.gender as 'all' | 'male' | 'female' | undefined,
-      ageRange: req.query.ageRange as
-        | 'all'
-        | 'under30'
-        | '30to45'
-        | 'over45'
-        | undefined,
+      ageRange: req.query.ageRange as 'all' | 'under30' | '30to45' | 'over45' | undefined,
       hourlyRateRange: req.query.hourlyRateRange as
         | 'all'
         | 'under70'
@@ -23,13 +30,9 @@ export class DiscoverController {
         | 'custom'
         | undefined,
       customHourlyRateMin:
-        req.query.customHourlyRateMin != null
-          ? Number(req.query.customHourlyRateMin)
-          : undefined,
+        req.query.customHourlyRateMin != null ? Number(req.query.customHourlyRateMin) : undefined,
       customHourlyRateMax:
-        req.query.customHourlyRateMax != null
-          ? Number(req.query.customHourlyRateMax)
-          : undefined,
+        req.query.customHourlyRateMax != null ? Number(req.query.customHourlyRateMax) : undefined,
     };
   }
 
@@ -85,10 +88,7 @@ export class DiscoverController {
         return next(new AppError('You are not authenticated.', 401));
       }
 
-      const profile = await DiscoverService.getMatePublicProfile(
-        req.user.id,
-        req.params.userId,
-      );
+      const profile = await DiscoverService.getMatePublicProfile(req.user.id, req.params.userId);
 
       if (!profile) {
         return next(new AppError('Mate profile not found.', 404));

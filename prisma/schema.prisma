@@ -13,71 +13,73 @@ enum Role {
 }
 
 model User {
-  id               String    @id @default(uuid())
-  email            String    @unique
-  phone            String?   @unique @map("phone")
+  id               String         @id @default(uuid())
+  email            String         @unique
+  phone            String?        @unique @map("phone")
   password         String
   name             String?
-  role             Role      @default(USER)
-  isActive         Boolean   @default(true) @map("is_active")
+  role             Role           @default(USER)
+  isActive         Boolean        @default(true) @map("is_active")
   profile          Profile?
-  sentRequests     Request[] @relation("SentRequests")
-  receivedRequests Request[] @relation("ReceivedRequests")
-  sentMessages     Message[] @relation("SentMessages")
-  receivedMessages Message[] @relation("ReceivedMessages")
+  sentRequests     Request[]      @relation("SentRequests")
+  receivedRequests Request[]      @relation("ReceivedRequests")
+  sentMessages     Message[]      @relation("SentMessages")
+  receivedMessages Message[]      @relation("ReceivedMessages")
   notifications    Notification[]
-  blocksSent       Block[]   @relation("UserBlocks")
-  blocksReceived   Block[]   @relation("UserBlockedBy")
-  reportsSent      Report[]  @relation("ReportedBy")
-  reportsReceived  Report[]  @relation("ReportedUser")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  blocksSent       Block[]        @relation("UserBlocks")
+  blocksReceived   Block[]        @relation("UserBlockedBy")
+  reportsSent      Report[]       @relation("ReportedBy")
+  reportsReceived  Report[]       @relation("ReportedUser")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
 
   @@map("users")
 }
 
 model Profile {
-  id           String    @id @default(uuid())
-  userId       String    @unique @map("user_id")
-  tenureId     String    @unique @map("tenure_id")
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  profilePhoto String?   @map("profile_photo")
-  fullName     String    @map("full_name")
-  dob          DateTime? @map("dob") @db.Date
-  gender       String?
-  country      String
-  state        String
-  district     String
-  pinCode      String    @map("pin_code")
-  languages    String[]
-  categories   String[]
-  hourlyRate   Float?    @map("hourly_rate")
-  categoryRates Json?     @map("category_rates")
-  about        String?
-  vibes        String[]  @default([])
-  professions  String[]  @default([])
-  qualification String?
-  bloodGroup    String?   @map("blood_group")
-  vehicles     String[]  @default([])
-  interests    String[]  @default([])
-  availableDays      String[] @default([]) @map("available_days")
-  availableTimeRange String?  @map("available_time_range")
-  bestTime           String?  @map("best_time")
-  comfortPreferredPlaces String? @map("comfort_preferred_places")
-  comfortTravelRange     String? @map("comfort_travel_range")
-  comfortWith            String? @map("comfort_with")
-  comfortNotWith         String? @map("comfort_not_with")
-  aadhaarVerified  Boolean @default(false) @map("aadhaar_verified")
-  aadhaarMasked    String? @map("aadhaar_masked")
-  gallery          String[] @default([])
-  instagram        String?
-  facebook         String?
-  youtube          String?
-  website          String?
-  instantAvailable Boolean   @default(false) @map("instant_available")
-  instantAvailableUntil DateTime? @map("instant_available_until")
-  instantCategories String[] @default([]) @map("instant_categories")
-  instantNote      String?   @map("instant_note")
+  id                     String    @id @default(uuid())
+  userId                 String    @unique @map("user_id")
+  tenureId               String    @unique @map("tenure_id")
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profilePhoto           String?   @map("profile_photo")
+  fullName               String    @map("full_name")
+  dob                    DateTime? @map("dob") @db.Date
+  gender                 String?
+  country                String
+  state                  String
+  district               String
+  pinCode                String    @map("pin_code")
+  latitude               Float?
+  longitude              Float?
+  languages              String[]
+  categories             String[]
+  hourlyRate             Float?    @map("hourly_rate")
+  categoryRates          Json?     @map("category_rates")
+  about                  String?
+  vibes                  String[]  @default([])
+  professions            String[]  @default([])
+  qualification          String?
+  bloodGroup             String?   @map("blood_group")
+  vehicles               String[]  @default([])
+  interests              String[]  @default([])
+  availableDays          String[]  @default([]) @map("available_days")
+  availableTimeRange     String?   @map("available_time_range")
+  bestTime               String?   @map("best_time")
+  comfortPreferredPlaces String?   @map("comfort_preferred_places")
+  comfortTravelRange     String?   @map("comfort_travel_range")
+  comfortWith            String?   @map("comfort_with")
+  comfortNotWith         String?   @map("comfort_not_with")
+  aadhaarVerified        Boolean   @default(false) @map("aadhaar_verified")
+  aadhaarMasked          String?   @map("aadhaar_masked")
+  gallery                String[]  @default([])
+  instagram              String?
+  facebook               String?
+  youtube                String?
+  website                String?
+  instantAvailable       Boolean   @default(false) @map("instant_available")
+  instantAvailableUntil  DateTime? @map("instant_available_until")
+  instantCategories      String[]  @default([]) @map("instant_categories")
+  instantNote            String?   @map("instant_note")
   profileVisibility      Boolean   @default(true) @map("profile_visibility")
   notifyRequests         Boolean   @default(true) @map("notify_requests")
   notifyChat             Boolean   @default(true) @map("notify_chat")
@@ -85,8 +87,8 @@ model Profile {
   emergencyName          String?   @map("emergency_name")
   emergencyPhone         String?   @map("emergency_phone")
   emergencyRelation      String?   @map("emergency_relation")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
 
   @@index([district])
   @@index([instantAvailable, instantAvailableUntil])
@@ -103,50 +105,50 @@ enum RequestStatus {
 }
 
 model Request {
-  id            String        @id @default(uuid())
-  senderId      String        @map("sender_id")
-  receiverId    String        @map("receiver_id")
-  sender        User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver      User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
-  categoryId    String        @map("category_id")
-  categoryLabel String        @map("category_label")
-  meetLocation  String        @map("meet_location")
-  fromDateTime  DateTime      @map("from_date_time")
-  toDateTime    DateTime      @map("to_date_time")
-  message       String?       @default("")
-  bookingFor    String        @default("self") @map("booking_for")
-  beneficiaryName String?     @map("beneficiary_name")
-  beneficiaryPhone String?    @map("beneficiary_phone")
-  beneficiaryRelation String? @map("beneficiary_relation")
-  beneficiaryNote String?     @map("beneficiary_note")
-  status        RequestStatus @default(PENDING)
-  messages      Message[]     @relation("RequestMessages")
-  session       Session?
-  otp           String?       @map("otp")
-  cancelledAt   DateTime?     @map("cancelled_at")
-  cancelledById String?       @map("cancelled_by_id")
-  cancellationFee Float       @default(0) @map("cancellation_fee")
-  cancellationFeeReason String? @map("cancellation_fee_reason")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
+  id                    String        @id @default(uuid())
+  senderId              String        @map("sender_id")
+  receiverId            String        @map("receiver_id")
+  sender                User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver              User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+  categoryId            String        @map("category_id")
+  categoryLabel         String        @map("category_label")
+  meetLocation          String        @map("meet_location")
+  fromDateTime          DateTime      @map("from_date_time")
+  toDateTime            DateTime      @map("to_date_time")
+  message               String?       @default("")
+  bookingFor            String        @default("self") @map("booking_for")
+  beneficiaryName       String?       @map("beneficiary_name")
+  beneficiaryPhone      String?       @map("beneficiary_phone")
+  beneficiaryRelation   String?       @map("beneficiary_relation")
+  beneficiaryNote       String?       @map("beneficiary_note")
+  status                RequestStatus @default(PENDING)
+  messages              Message[]     @relation("RequestMessages")
+  session               Session?
+  otp                   String?       @map("otp")
+  cancelledAt           DateTime?     @map("cancelled_at")
+  cancelledById         String?       @map("cancelled_by_id")
+  cancellationFee       Float         @default(0) @map("cancellation_fee")
+  cancellationFeeReason String?       @map("cancellation_fee_reason")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
 
   @@map("requests")
 }
 
 model Message {
-  id             String    @id @default(uuid())
-  requestId      String    @map("request_id")
-  senderId       String    @map("sender_id")
-  receiverId     String    @map("receiver_id")
-  content        String
-  type           String    @default("text") // 'text', 'image', 'voice'
-  mediaUrl       String?   @map("media_url")
-  voiceDuration  Int?      @map("voice_duration")
-  createdAt      DateTime  @default(now()) @map("created_at")
+  id            String   @id @default(uuid())
+  requestId     String   @map("request_id")
+  senderId      String   @map("sender_id")
+  receiverId    String   @map("receiver_id")
+  content       String
+  type          String   @default("text") // 'text', 'image', 'voice'
+  mediaUrl      String?  @map("media_url")
+  voiceDuration Int?     @map("voice_duration")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  request        Request   @relation("RequestMessages", fields: [requestId], references: [id], onDelete: Cascade)
-  sender         User      @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver       User      @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  request  Request @relation("RequestMessages", fields: [requestId], references: [id], onDelete: Cascade)
+  sender   User    @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User    @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
 
   @@map("messages")
 }
@@ -172,8 +174,7 @@ model Session {
   lastActionBy        String?       @map("last_action_by")
   endReason           String?       @map("end_reason")
 
-  request             Request       @relation(fields: [requestId], references: [id], onDelete: Cascade)
-
+  request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   @@map("sessions")
 }
@@ -196,26 +197,23 @@ model Block {
   blockedId String   @map("blocked_id")
   createdAt DateTime @default(now()) @map("created_at")
 
-  blocker   User     @relation("UserBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
-  blocked   User     @relation("UserBlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+  blocker User @relation("UserBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("UserBlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedId])
   @@map("blocks")
 }
 
 model Report {
-  id          String   @id @default(uuid())
-  reporterId  String   @map("reporter_id")
-  targetId    String?  @map("target_id")
-  category    String
-  message     String
-  createdAt   DateTime @default(now()) @map("created_at")
+  id         String   @id @default(uuid())
+  reporterId String   @map("reporter_id")
+  targetId   String?  @map("target_id")
+  category   String
+  message    String
+  createdAt  DateTime @default(now()) @map("created_at")
 
-  reporter    User     @relation("ReportedBy", fields: [reporterId], references: [id], onDelete: Cascade)
-  target      User?    @relation("ReportedUser", fields: [targetId], references: [id], onDelete: Cascade)
+  reporter User  @relation("ReportedBy", fields: [reporterId], references: [id], onDelete: Cascade)
+  target   User? @relation("ReportedUser", fields: [targetId], references: [id], onDelete: Cascade)
 
   @@map("reports")
 }
-
-
-
