@@ -33,3 +33,9 @@ export const mateProfileParamsSchema = z.object({
     userId: z.string().uuid('Invalid user id'),
   }),
 });
+
+export const savedMateParamsSchema = z.object({
+  params: z.object({
+    mateUserId: z.string().uuid('Invalid mate user id'),
+  }),
+});

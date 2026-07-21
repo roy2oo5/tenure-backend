@@ -1,6 +1,7 @@
 import { Prisma, Profile } from '@prisma/client';
 import { prisma } from '../config/database';
 import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
+import { AppError } from '../utils/app-error';
 
 export type DiscoverSearchInput = {
   q?: string;
@@ -44,6 +45,9 @@ export type DiscoverMateResult = {
   instantCategories: string[];
   instantNote: string | null;
   distanceKm: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  saved: boolean;
 };
 
 const PLACEHOLDER_NAME = /^user\s+\d{10}$/i;
@@ -242,7 +246,11 @@ function displayCategory(profile: Profile, requestedCategory?: string | null): s
   return profile.categories[0] ?? 'Support';
 }
 
-function toDiscoverMate(profile: Profile, input: DiscoverSearchInput = {}): DiscoverMateResult {
+function toDiscoverMate(
+  profile: Profile,
+  input: DiscoverSearchInput = {},
+  savedMateIds = new Set<string>(),
+): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
   return {
     userId: profile.userId,
@@ -278,7 +286,18 @@ function toDiscoverMate(profile: Profile, input: DiscoverSearchInput = {}): Disc
       profile.latitude,
       profile.longitude,
     ),
+    latitude: profile.latitude,
+    longitude: profile.longitude,
+    saved: savedMateIds.has(profile.userId),
   };
+}
+
+async function savedMateIdsForUser(userId: string): Promise<Set<string>> {
+  const rows = await prisma.savedMate.findMany({
+    where: { userId },
+    select: { mateUserId: true },
+  });
+  return new Set(rows.map((row) => row.mateUserId));
 }
 
 export class DiscoverService {
@@ -318,6 +337,7 @@ export class DiscoverService {
       where,
       orderBy: { updatedAt: 'desc' },
     });
+    const savedMateIds = await savedMateIdsForUser(currentUserId);
 
     return profiles
       .filter(isDiscoverableProfile)
@@ -326,7 +346,7 @@ export class DiscoverService {
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
       .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map((profile) => toDiscoverMate(profile, input));
+      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
   }
 
   public static async getMatePublicProfile(
@@ -363,7 +383,8 @@ export class DiscoverService {
       return null;
     }
 
-    return toDiscoverMate(profile);
+    const savedMateIds = await savedMateIdsForUser(currentUserId);
+    return toDiscoverMate(profile, {}, savedMateIds);
   }
 
   public static async getInstantMates(
@@ -403,6 +424,7 @@ export class DiscoverService {
       where,
       orderBy: { updatedAt: 'desc' },
     });
+    const savedMateIds = await savedMateIdsForUser(currentUserId);
 
     return profiles
       .filter(isDiscoverableProfile)
@@ -411,6 +433,66 @@ export class DiscoverService {
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
       .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map((profile) => toDiscoverMate(profile, input));
+      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
+  }
+
+  public static async listSavedMates(
+    currentUserId: string,
+    input: DiscoverSearchInput,
+  ): Promise<DiscoverMateResult[]> {
+    const savedRows = await prisma.savedMate.findMany({
+      where: { userId: currentUserId },
+      select: { mateUserId: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const savedMateIds = new Set(savedRows.map((row) => row.mateUserId));
+    if (!savedMateIds.size) {
+      return [];
+    }
+
+    const profiles = await prisma.profile.findMany({
+      where: {
+        userId: { in: [...savedMateIds] },
+        profileVisibility: true,
+        categories: { isEmpty: false },
+        user: { isActive: true },
+      },
+    });
+    const profileByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
+
+    return savedRows
+      .map((row) => profileByUserId.get(row.mateUserId))
+      .filter((profile): profile is Profile => Boolean(profile))
+      .filter(isDiscoverableProfile)
+      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
+  }
+
+  public static async saveMate(currentUserId: string, mateUserId: string): Promise<void> {
+    if (currentUserId === mateUserId) {
+      throw new AppError('You cannot save your own profile.', 400);
+    }
+
+    await prisma.savedMate.upsert({
+      where: {
+        userId_mateUserId: {
+          userId: currentUserId,
+          mateUserId,
+        },
+      },
+      update: {},
+      create: {
+        userId: currentUserId,
+        mateUserId,
+      },
+    });
+  }
+
+  public static async unsaveMate(currentUserId: string, mateUserId: string): Promise<void> {
+    await prisma.savedMate.deleteMany({
+      where: {
+        userId: currentUserId,
+        mateUserId,
+      },
+    });
   }
 }

@@ -26,6 +26,8 @@ model User {
   sentMessages     Message[]      @relation("SentMessages")
   receivedMessages Message[]      @relation("ReceivedMessages")
   notifications    Notification[]
+  savedMates       SavedMate[]    @relation("SavedByUser")
+  savedByUsers     SavedMate[]    @relation("SavedMateUser")
   blocksSent       Block[]        @relation("UserBlocks")
   blocksReceived   Block[]        @relation("UserBlockedBy")
   reportsSent      Report[]       @relation("ReportedBy")
@@ -189,6 +191,19 @@ model Notification {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("notifications")
+}
+
+model SavedMate {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  mateUserId String   @map("mate_user_id")
+  user       User     @relation("SavedByUser", fields: [userId], references: [id], onDelete: Cascade)
+  mate       User     @relation("SavedMateUser", fields: [mateUserId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, mateUserId])
+  @@index([mateUserId])
+  @@map("saved_mates")
 }
 
 model Block {

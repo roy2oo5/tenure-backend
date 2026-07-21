@@ -9,6 +9,11 @@ vi.mock('@/config/database', () => ({
     block: {
       findMany: vi.fn().mockResolvedValue([]),
     },
+    savedMate: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(),
+      deleteMany: vi.fn(),
+    },
   },
 }));
 

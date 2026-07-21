@@ -5,11 +5,17 @@ import { DiscoverController } from '../controllers/discover.controller';
 import { BlockController } from '../controllers/block.controller';
 import { validate } from '../middlewares/validation.middleware';
 import { protect, restrictTo } from '../middlewares/auth.middleware';
-import { registerSchema, loginSchema, updateUserSchema, phoneAuthSchema } from '../validations/user.validation';
+import {
+  registerSchema,
+  loginSchema,
+  updateUserSchema,
+  phoneAuthSchema,
+} from '../validations/user.validation';
 import { createProfileSchema } from '../validations/profile.validation';
 import {
   discoverSearchSchema,
   mateProfileParamsSchema,
+  savedMateParamsSchema,
 } from '../validations/discover.validation';
 import { Role } from '@prisma/client';
 
@@ -265,7 +271,6 @@ router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
 router.get('/me', protect, UserController.getMe);
 router.get('/active-session', protect, UserController.getActiveSession);
 
-
 /**
  * @swagger
  * /users/update-me:
@@ -403,7 +408,7 @@ router.get('/blocked', protect, BlockController.getBlocked);
  *         description: Validation error.
  *       401:
  *         description: Not authenticated.
- * 
+ *
  *   get:
  *     summary: Get the current user's profile
  *     tags: [Profile]
@@ -433,17 +438,25 @@ router.get('/blocked', protect, BlockController.getBlocked);
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
 
-router.get(
-  '/discover',
-  protect,
-  validate(discoverSearchSchema),
-  DiscoverController.search,
-);
+router.get('/discover', protect, validate(discoverSearchSchema), DiscoverController.search);
 router.get(
   '/discover/instants',
   protect,
   validate(discoverSearchSchema),
   DiscoverController.instants,
+);
+router.get('/saved-mates', protect, validate(discoverSearchSchema), DiscoverController.saved);
+router.post(
+  '/saved-mates/:mateUserId',
+  protect,
+  validate(savedMateParamsSchema),
+  DiscoverController.saveMate,
+);
+router.delete(
+  '/saved-mates/:mateUserId',
+  protect,
+  validate(savedMateParamsSchema),
+  DiscoverController.unsaveMate,
 );
 router.get(
   '/mates/:userId',
@@ -517,4 +530,3 @@ router.get('/', protect, restrictTo(Role.ADMIN), UserController.getAll);
 router.delete('/:id', protect, restrictTo(Role.ADMIN), UserController.deleteUser);
 
 export default router;
-

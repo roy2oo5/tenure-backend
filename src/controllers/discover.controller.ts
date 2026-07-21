@@ -102,4 +102,59 @@ export class DiscoverController {
       next(error);
     }
   }
+
+  public static async saved(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      const mates = await DiscoverService.listSavedMates(
+        req.user.id,
+        DiscoverController.buildSearchInput(req),
+      );
+
+      res.status(200).json({
+        status: 'success',
+        results: mates.length,
+        data: { mates },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async saveMate(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      await DiscoverService.saveMate(req.user.id, req.params.mateUserId);
+
+      res.status(200).json({
+        status: 'success',
+        data: { saved: true },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async unsaveMate(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      await DiscoverService.unsaveMate(req.user.id, req.params.mateUserId);
+
+      res.status(200).json({
+        status: 'success',
+        data: { saved: false },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
