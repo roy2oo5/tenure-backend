@@ -31,10 +31,16 @@ export type DiscoverMateResult = {
   categoryRates: Record<string, number>;
   languages: string[];
   about: string | null;
+  professions: string[];
+  qualification: string | null;
+  bloodGroup: string | null;
   availableDays: string[];
   availableTimeRange: string | null;
   bestTime: string | null;
   aadhaarVerified: boolean;
+  phoneAdded: boolean;
+  emailAdded: boolean;
+  livePhotoAdded: boolean;
   gallery: string[];
   instagram: string | null;
   facebook: string | null;
@@ -48,6 +54,20 @@ export type DiscoverMateResult = {
   latitude: number | null;
   longitude: number | null;
   saved: boolean;
+};
+
+type PublicProfile = Profile & {
+  user?: {
+    email?: string | null;
+    phone?: string | null;
+  } | null;
+};
+
+type PublicProfileWithUser = Profile & {
+  user: {
+    email: string;
+    phone: string | null;
+  };
 };
 
 const PLACEHOLDER_NAME = /^user\s+\d{10}$/i;
@@ -247,11 +267,14 @@ function displayCategory(profile: Profile, requestedCategory?: string | null): s
 }
 
 function toDiscoverMate(
-  profile: Profile,
+  profile: PublicProfile,
   input: DiscoverSearchInput = {},
   savedMateIds = new Set<string>(),
 ): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
+  const livePhotoAdded = profile.gallery.some((uri) =>
+    uri.toLowerCase().includes('live-photo'),
+  );
   return {
     userId: profile.userId,
     tenureId: profile.tenureId,
@@ -267,10 +290,16 @@ function toDiscoverMate(
     categoryRates: categoryRatesRecord(profile.categoryRates),
     languages: profile.languages,
     about: profile.about,
+    professions: profile.professions,
+    qualification: profile.qualification,
+    bloodGroup: profile.bloodGroup,
     availableDays: profile.availableDays,
     availableTimeRange: profile.availableTimeRange,
     bestTime: profile.bestTime,
     aadhaarVerified: profile.aadhaarVerified,
+    phoneAdded: Boolean(profile.user?.phone?.trim()),
+    emailAdded: Boolean(profile.user?.email?.trim()),
+    livePhotoAdded,
     gallery: profile.gallery,
     instagram: profile.instagram,
     facebook: profile.facebook,
@@ -335,6 +364,7 @@ export class DiscoverService {
 
     const profiles = await prisma.profile.findMany({
       where,
+      include: { user: { select: { email: true, phone: true } } },
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
@@ -422,6 +452,7 @@ export class DiscoverService {
 
     const profiles = await prisma.profile.findMany({
       where,
+      include: { user: { select: { email: true, phone: true } } },
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
@@ -457,12 +488,13 @@ export class DiscoverService {
         categories: { isEmpty: false },
         user: { isActive: true },
       },
+      include: { user: { select: { email: true, phone: true } } },
     });
     const profileByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
 
     return savedRows
       .map((row) => profileByUserId.get(row.mateUserId))
-      .filter((profile): profile is Profile => Boolean(profile))
+      .filter((profile): profile is PublicProfileWithUser => Boolean(profile))
       .filter(isDiscoverableProfile)
       .map((profile) => toDiscoverMate(profile, input, savedMateIds));
   }
