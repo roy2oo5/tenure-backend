@@ -226,4 +226,65 @@ export class ProfileService {
       where: { userId },
     });
   }
+
+  /**
+   * Update profile photo for a user
+   */
+  public static async updateProfilePhoto(userId: string, photoUrl: string): Promise<Profile> {
+    const existingProfile = await prisma.profile.findUnique({ where: { userId } });
+    if (!existingProfile) {
+      const tenureId = await generateUniqueTenureId();
+      return prisma.profile.create({
+        data: {
+          userId,
+          tenureId,
+          fullName: 'User',
+          country: '',
+          state: '',
+          district: '',
+          pinCode: '',
+          languages: [],
+          profilePhoto: photoUrl,
+        },
+      });
+    }
+
+    return prisma.profile.update({
+      where: { userId },
+      data: { profilePhoto: photoUrl },
+    });
+  }
+
+  /**
+   * Add a photo to the user's gallery
+   */
+  public static async addGalleryPhoto(userId: string, photoUrl: string): Promise<Profile> {
+    const existingProfile = await prisma.profile.findUnique({ where: { userId } });
+    if (!existingProfile) {
+      const tenureId = await generateUniqueTenureId();
+      return prisma.profile.create({
+        data: {
+          userId,
+          tenureId,
+          fullName: 'User',
+          country: '',
+          state: '',
+          district: '',
+          pinCode: '',
+          languages: [],
+          gallery: [photoUrl],
+        },
+      });
+    }
+
+    return prisma.profile.update({
+      where: { userId },
+      data: {
+        gallery: {
+          push: photoUrl,
+        },
+      },
+    });
+  }
 }
+

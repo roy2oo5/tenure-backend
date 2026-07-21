@@ -30,7 +30,9 @@ if (hasS3Config) {
     logger.error(`Failed to initialize AWS S3 client: ${error.message}`);
   }
 } else {
-  logger.info('📁 AWS S3 configuration not found or is using placeholder. Falling back to local storage.');
+  logger.info(
+    '📁 AWS S3 configuration not found or is using placeholder. Falling back to local storage.',
+  );
 }
 
 export class UploadService {
@@ -42,7 +44,7 @@ export class UploadService {
     file: Express.Multer.File,
     folder: string = 'uploads',
     reqHost?: string,
-    reqProtocol?: string
+    reqProtocol?: string,
   ): Promise<string> {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const fileExtension = path.extname(file.originalname) || '.jpg';
@@ -62,10 +64,12 @@ export class UploadService {
               Body: file.buffer,
               ContentType: file.mimetype,
               ACL: 'public-read',
-            })
+            }),
           );
         } catch (aclError: any) {
-          logger.warn(`S3 upload with ACL failed: ${aclError.message}. Retrying without ACL (modern S3 configuration)...`);
+          logger.warn(
+            `S3 upload with ACL failed: ${aclError.message}. Retrying without ACL (modern S3 configuration)...`,
+          );
           // Retry without ACL in case S3 bucket policy enforces BucketOwnerEnforced or ACL is disabled
           await s3Client.send(
             new PutObjectCommand({
@@ -73,7 +77,7 @@ export class UploadService {
               Key: fileName,
               Body: file.buffer,
               ContentType: file.mimetype,
-            })
+            }),
           );
         }
 
@@ -83,7 +87,9 @@ export class UploadService {
         }
         return `/api/upload/media/${encodeURIComponent(fileName)}`;
       } catch (error: any) {
-        logger.error(`S3 upload failed completely: ${error.message}. Falling back to local storage.`);
+        logger.error(
+          `S3 upload failed completely: ${error.message}. Falling back to local storage.`,
+        );
       }
     }
 
@@ -115,9 +121,7 @@ export class UploadService {
     }
   }
 
-  public static async getFile(
-    rawKey: string
-  ): Promise<{ stream: Readable; contentType: string }> {
+  public static async getFile(rawKey: string): Promise<{ stream: Readable; contentType: string }> {
     const key = UploadService.normalizeUploadedKey(rawKey);
 
     if (s3Client && process.env.AWS_S3_BUCKET) {
@@ -125,7 +129,7 @@ export class UploadService {
         new GetObjectCommand({
           Bucket: process.env.AWS_S3_BUCKET,
           Key: key,
-        })
+        }),
       );
       if (!response.Body || !(response.Body instanceof Readable)) {
         throw new AppError('Uploaded file not found', 404);
@@ -153,7 +157,7 @@ export class UploadService {
     if (
       normalized.startsWith('../') ||
       normalized.includes('/../') ||
-      !normalized.startsWith('uploads/')
+      !['gallery/', 'profiles/', 'uploads/'].some((prefix) => normalized.startsWith(prefix))
     ) {
       throw new AppError('Invalid uploaded file path', 400);
     }
