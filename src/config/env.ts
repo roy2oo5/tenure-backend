@@ -1,8 +1,10 @@
 import dotenv from 'dotenv';
+import path from 'path';
 import { z } from 'zod';
 
 // Load environment variables from .env file
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(5000),
@@ -16,6 +18,11 @@ const envSchema = z.object({
   AWS_S3_BUCKET: z.string().optional(),
   DIDIT_API_KEY: z.string().optional(),
   DIDIT_API_BASE_URL: z.string().url().default('https://verification.didit.me'),
+  DIDIT_WEBHOOK_SECRET: z.string().optional(),
+  DIDIT_WEBHOOK_KEY: z.string().optional(),
+  MSG91_AUTHKEY: z.string().optional(),
+  MSG91_WIDGET_ID: z.string().optional(),
+  MSG91_WIDGET_TOKEN_AUTH: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

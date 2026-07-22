@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { UserService } from '../services/user.service';
 import { SessionService } from '../services/session.service';
+import { Msg91Service } from '../services/msg91.service';
 import { AppError } from '../utils/app-error';
-
 
 export class UserController {
   public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -33,7 +33,12 @@ export class UserController {
 
   public static async phoneAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { phone } = req.body;
+      const { phone, accessToken, reqId, otp } = req.body;
+      if (accessToken) {
+        await Msg91Service.verifyAccessToken(accessToken, phone);
+      } else {
+        await Msg91Service.verifyOtp(reqId, otp);
+      }
       const result = await UserService.authenticateByPhone(phone);
       res.status(200).json({
         status: 'success',
@@ -130,7 +135,11 @@ export class UserController {
     }
   }
 
-  public static async changePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async changePassword(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
@@ -148,7 +157,11 @@ export class UserController {
     }
   }
 
-  public static async getActiveSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async getActiveSession(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
@@ -163,4 +176,3 @@ export class UserController {
     }
   }
 }
-

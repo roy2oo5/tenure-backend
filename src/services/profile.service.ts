@@ -98,6 +98,15 @@ function maskAadhaar(aadhaarNumber: string): string {
   return digits.length >= 4 ? `XXXX XXXX ${digits.slice(-4)}` : 'XXXX XXXX XXXX';
 }
 
+function diditApiKey(): string | undefined {
+  return (
+    env.DIDIT_API_KEY ??
+    process.env.DIDIT_API_KEY ??
+    process.env.DIDIT_API_TOKEN ??
+    process.env.DIDIT_KEY
+  )?.trim();
+}
+
 export class ProfileService {
   /**
    * Upsert a user profile (create if not exists, update if exists)
@@ -242,7 +251,8 @@ export class ProfileService {
     userId: string,
     data: { aadhaarNumber: string; fullName: string; dob: string },
   ): Promise<{ profile: Profile | null; matchType: string; message: string }> {
-    if (!env.DIDIT_API_KEY) {
+    const apiKey = diditApiKey();
+    if (!apiKey) {
       throw new AppError('Aadhaar verification is not configured.', 503);
     }
 
@@ -263,7 +273,7 @@ export class ProfileService {
     const response = await fetch(`${env.DIDIT_API_BASE_URL}/v3/database-validation/`, {
       method: 'POST',
       headers: {
-        'x-api-key': env.DIDIT_API_KEY,
+        'x-api-key': apiKey,
       },
       body: form,
     });

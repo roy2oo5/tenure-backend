@@ -6,6 +6,7 @@ import swaggerUi from 'swagger-ui-express';
 import path from 'path';
 import { swaggerSpec } from './config/swagger';
 import routes from './routes';
+import diditWebhookRoutes from './routes/didit-webhook.routes';
 import { errorHandler } from './middlewares/error.middleware';
 import { AppError } from './utils/app-error';
 import { logger } from './utils/logger';
@@ -17,6 +18,13 @@ app.use(helmet());
 
 // Cross-Origin Resource Sharing
 app.use(cors());
+
+// Didit webhooks need the body before any JSON parser mutates it.
+app.use(
+  '/api/webhooks/didit',
+  express.raw({ type: 'application/json', limit: '200kb' }),
+  diditWebhookRoutes,
+);
 
 // Body Parsers with size limiting to prevent payload-based DoS
 app.use(express.json({ limit: '10kb' }));

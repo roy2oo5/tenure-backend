@@ -233,6 +233,15 @@ router.post('/login', validate(loginSchema), UserController.login);
  *               phone:
  *                 type: string
  *                 example: "9876543210"
+ *               accessToken:
+ *                 type: string
+ *                 description: Optional access token returned by MSG91 after OTP verification.
+ *               reqId:
+ *                 type: string
+ *                 description: MSG91 request id returned when OTP was sent.
+ *               otp:
+ *                 type: string
+ *                 description: OTP entered by the user. Required with reqId when accessToken is not supplied.
  *     responses:
  *       200:
  *         description: Existing user logged in or new user created. Returns user and JWT.

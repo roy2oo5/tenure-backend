@@ -2,12 +2,17 @@ import { z } from 'zod';
 import { Role } from '@prisma/client';
 
 export const phoneAuthSchema = z.object({
-  body: z.object({
-    phone: z
-      .string()
-      .min(10, 'Phone number is required')
-      .max(15, 'Phone number is too long'),
-  }),
+  body: z
+    .object({
+      phone: z.string().min(10, 'Phone number is required').max(15, 'Phone number is too long'),
+      accessToken: z.string().optional(),
+      reqId: z.string().optional(),
+      otp: z.string().optional(),
+    })
+    .refine((body) => body.accessToken || (body.reqId && body.otp), {
+      message: 'Provide either OTP access token or reqId with otp',
+      path: ['accessToken'],
+    }),
 });
 
 export const registerSchema = z.object({
