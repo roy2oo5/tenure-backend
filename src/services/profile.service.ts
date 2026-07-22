@@ -1,6 +1,8 @@
 import { prisma } from '../config/database';
 import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
+import { env } from '../config/env';
+import { AppError } from '../utils/app-error';
 
 export type ProfileUpsertInput = {
   profilePhoto?: string | null;
@@ -31,8 +33,6 @@ export type ProfileUpsertInput = {
   comfortTravelRange?: string | null;
   comfortWith?: string | null;
   comfortNotWith?: string | null;
-  aadhaarVerified?: boolean;
-  aadhaarMasked?: string | null;
   gallery?: string[] | null;
   instagram?: string | null;
   facebook?: string | null;
@@ -93,6 +93,11 @@ function normalizeCategoryRates(
   return Object.fromEntries(entries);
 }
 
+function maskAadhaar(aadhaarNumber: string): string {
+  const digits = aadhaarNumber.replace(/\D/g, '');
+  return digits.length >= 4 ? `XXXX XXXX ${digits.slice(-4)}` : 'XXXX XXXX XXXX';
+}
+
 export class ProfileService {
   /**
    * Upsert a user profile (create if not exists, update if exists)
@@ -102,6 +107,8 @@ export class ProfileService {
       where: { userId },
       select: {
         tenureId: true,
+        aadhaarVerified: true,
+        aadhaarMasked: true,
         instantAvailable: true,
         instantAvailableUntil: true,
         instantCategories: true,
@@ -189,8 +196,8 @@ export class ProfileService {
       comfortTravelRange: data.comfortTravelRange ?? null,
       comfortWith: data.comfortWith ?? null,
       comfortNotWith: data.comfortNotWith ?? null,
-      aadhaarVerified: data.aadhaarVerified ?? false,
-      aadhaarMasked: data.aadhaarMasked ?? null,
+      aadhaarVerified: existingProfile?.aadhaarVerified ?? false,
+      aadhaarMasked: existingProfile?.aadhaarMasked ?? null,
       gallery: data.gallery ?? [],
       instagram: data.instagram ?? null,
       facebook: data.facebook ?? null,
@@ -229,6 +236,67 @@ export class ProfileService {
     return prisma.profile.findUnique({
       where: { userId },
     });
+  }
+
+  public static async verifyAadhaar(
+    userId: string,
+    data: { aadhaarNumber: string; fullName: string; dob: string },
+  ): Promise<{ profile: Profile | null; matchType: string; message: string }> {
+    if (!env.DIDIT_API_KEY) {
+      throw new AppError('Aadhaar verification is not configured.', 503);
+    }
+
+    const profile = await prisma.profile.findUnique({ where: { userId } });
+    if (!profile) {
+      throw new AppError('Profile not found for this user.', 404);
+    }
+
+    const form = new FormData();
+    form.append('issuing_state', 'IND');
+    form.append('services', 'ind_aadhaar');
+    form.append('vendor_data', userId);
+    form.append('consent', 'true');
+    form.append('full_name', data.fullName.trim());
+    form.append('date_of_birth', data.dob);
+    form.append('personal_number', data.aadhaarNumber);
+
+    const response = await fetch(`${env.DIDIT_API_BASE_URL}/v3/database-validation/`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': env.DIDIT_API_KEY,
+      },
+      body: form,
+    });
+
+    const responseBody = (await response.json().catch(() => null)) as { match_type?: unknown } | null;
+    if (!response.ok) {
+      throw new AppError('Aadhaar verification failed. Please try again.', response.status);
+    }
+
+    const matchType = typeof responseBody?.match_type === 'string' ? responseBody.match_type : 'no_match';
+    if (matchType === 'full_match') {
+      const updatedProfile = await prisma.profile.update({
+        where: { userId },
+        data: {
+          aadhaarVerified: true,
+          aadhaarMasked: maskAadhaar(data.aadhaarNumber),
+        },
+      });
+      return {
+        profile: updatedProfile,
+        matchType,
+        message: 'Verification success',
+      };
+    }
+
+    return {
+      profile,
+      matchType,
+      message:
+        matchType === 'partial_match'
+          ? 'Details incorrect, cross check'
+          : 'Details not matched',
+    };
   }
 
   /**

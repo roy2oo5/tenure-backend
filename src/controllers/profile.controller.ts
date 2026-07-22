@@ -46,4 +46,21 @@ export class ProfileController {
       next(error);
     }
   }
+
+  public static async verifyAadhaar(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      const result = await ProfileService.verifyAadhaar(req.user.id, req.body);
+
+      res.status(200).json({
+        status: 'success',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

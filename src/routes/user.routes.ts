@@ -11,7 +11,7 @@ import {
   updateUserSchema,
   phoneAuthSchema,
 } from '../validations/user.validation';
-import { createProfileSchema } from '../validations/profile.validation';
+import { createProfileSchema, verifyAadhaarSchema } from '../validations/profile.validation';
 import {
   discoverSearchSchema,
   mateProfileParamsSchema,
@@ -437,6 +437,12 @@ router.get('/blocked', protect, BlockController.getBlocked);
  */
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
+router.post(
+  '/profile/aadhaar-verification',
+  protect,
+  validate(verifyAadhaarSchema),
+  ProfileController.verifyAadhaar,
+);
 
 router.get('/discover', protect, validate(discoverSearchSchema), DiscoverController.search);
 router.get(

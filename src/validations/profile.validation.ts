@@ -68,8 +68,6 @@ export const createProfileSchema = z.object({
     }, z.date().optional().nullable()),
     instantCategories: stringArray,
     instantNote: z.string().optional().nullable(),
-    aadhaarVerified: z.boolean().optional(),
-    aadhaarMasked: z.string().optional().nullable(),
     profileVisibility: z.boolean().optional(),
     notifyRequests: z.boolean().optional(),
     notifyChat: z.boolean().optional(),
@@ -77,5 +75,18 @@ export const createProfileSchema = z.object({
     emergencyName: z.string().optional().nullable(),
     emergencyPhone: z.string().optional().nullable(),
     emergencyRelation: z.string().optional().nullable(),
+  }),
+});
+
+export const verifyAadhaarSchema = z.object({
+  body: z.object({
+    aadhaarNumber: z
+      .string()
+      .transform((value) => value.replace(/\s+/g, ''))
+      .pipe(z.string().regex(/^\d{12}$/, 'Enter a valid 12-digit Aadhaar number')),
+    fullName: z.string().min(1, 'Full name is required'),
+    dob: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format'),
   }),
 });

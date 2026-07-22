@@ -27,6 +27,8 @@ const extendedProfileDefaults = {
   availableDays: [],
   availableTimeRange: null,
   bestTime: null,
+  latitude: null,
+  longitude: null,
   comfortPreferredPlaces: null,
   comfortTravelRange: null,
   comfortWith: null,
@@ -90,6 +92,8 @@ describe('ProfileService', () => {
         where: { userId: 'user-id-123' },
         select: {
           tenureId: true,
+          aadhaarVerified: true,
+          aadhaarMasked: true,
           instantAvailable: true,
           instantAvailableUntil: true,
           instantCategories: true,
@@ -163,6 +167,8 @@ describe('ProfileService', () => {
         where: { userId: 'user-id-123' },
         select: {
           tenureId: true,
+          aadhaarVerified: true,
+          aadhaarMasked: true,
           instantAvailable: true,
           instantAvailableUntil: true,
           instantCategories: true,
