@@ -11,13 +11,15 @@ export type CreateRequestInput = {
   categoryLabel: string;
   meetLocation: string;
   fromDateTime: Date;
-  toDateTime: Date;
+  toDateTime?: Date | null;
   message?: string | null;
   bookingFor?: 'self' | 'someone_else';
   beneficiaryName?: string | null;
   beneficiaryPhone?: string | null;
   beneficiaryRelation?: string | null;
   beneficiaryNote?: string | null;
+  readyToPayTravelCharges?: boolean;
+  readyToPayTip?: boolean;
 };
 
 export type FrontendRequestStatus =
@@ -40,13 +42,15 @@ export type MappedRequest = {
   categoryLabel: string;
   meetLocation: string;
   fromDateTime: string;
-  toDateTime: string;
+  toDateTime: string | null;
   message: string;
   bookingFor: 'self' | 'someone_else';
   beneficiaryName?: string | null;
   beneficiaryPhone?: string | null;
   beneficiaryRelation?: string | null;
   beneficiaryNote?: string | null;
+  readyToPayTravelCharges: boolean;
+  readyToPayTip: boolean;
   status: FrontendRequestStatus;
   sentAt: string;
   sessionStatus?: string | null;
@@ -296,7 +300,7 @@ const minutesInDay = (date: Date): number => date.getHours() * 60 + date.getMinu
 const requestFitsAvailability = (
   profile: Pick<Profile, 'availableDays' | 'availableTimeRange'> | null | undefined,
   from: Date,
-  to: Date,
+  to?: Date | null,
 ): boolean => {
   if (!profile) {
     return true;
@@ -308,7 +312,9 @@ const requestFitsAvailability = (
     return true;
   }
 
-  if (from.toDateString() !== to.toDateString()) {
+  const effectiveTo = to ?? from;
+
+  if (from.toDateString() !== effectiveTo.toDateString()) {
     return false;
   }
 
@@ -321,7 +327,7 @@ const requestFitsAvailability = (
   }
 
   const start = minutesInDay(from);
-  const end = minutesInDay(to);
+  const end = minutesInDay(effectiveTo);
 
   if (range.end > range.start) {
     return start >= range.start && end <= range.end;
@@ -415,6 +421,8 @@ export class RequestService {
         message: data.message ?? '',
         bookingFor,
         ...beneficiaryData,
+        readyToPayTravelCharges: data.readyToPayTravelCharges ?? false,
+        readyToPayTip: data.readyToPayTip ?? false,
         status: RequestStatus.PENDING,
       },
     });
@@ -430,9 +438,11 @@ export class RequestService {
       categoryLabel: newRequest.categoryLabel,
       meetLocation: newRequest.meetLocation,
       fromDateTime: newRequest.fromDateTime.toISOString(),
-      toDateTime: newRequest.toDateTime.toISOString(),
+      toDateTime: newRequest.toDateTime?.toISOString() ?? null,
       message: newRequest.message ?? '',
       ...beneficiaryFields(newRequest),
+      readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
+      readyToPayTip: newRequest.readyToPayTip,
       status: 'pending',
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
@@ -485,9 +495,11 @@ export class RequestService {
         categoryLabel: req.categoryLabel,
         meetLocation: req.meetLocation,
         fromDateTime: req.fromDateTime.toISOString(),
-        toDateTime: req.toDateTime.toISOString(),
+        toDateTime: req.toDateTime?.toISOString() ?? null,
         message: req.message ?? '',
         ...beneficiaryFields(req),
+        readyToPayTravelCharges: req.readyToPayTravelCharges,
+        readyToPayTip: req.readyToPayTip,
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
@@ -514,9 +526,11 @@ export class RequestService {
         categoryLabel: req.categoryLabel,
         meetLocation: req.meetLocation,
         fromDateTime: req.fromDateTime.toISOString(),
-        toDateTime: req.toDateTime.toISOString(),
+        toDateTime: req.toDateTime?.toISOString() ?? null,
         message: req.message ?? '',
         ...beneficiaryFields(req),
+        readyToPayTravelCharges: req.readyToPayTravelCharges,
+        readyToPayTip: req.readyToPayTip,
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
@@ -538,6 +552,7 @@ export class RequestService {
     userId: string,
     requestId: string,
     status: 'confirmed' | 'declined' | 'cancelled',
+    cancellationReason?: string | null,
   ): Promise<MappedRequest> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
@@ -625,6 +640,9 @@ export class RequestService {
     const cancellationFee = isLateCancellation
       ? hourlyRateForRequest(request.receiver.profile, request.categoryLabel)
       : 0;
+    const normalizedCancellationReason = cancellationReason?.trim() || null;
+    const storedCancellationReason =
+      normalizedCancellationReason ?? (isLateCancellation ? LATE_CANCELLATION_REASON : null);
 
     const updatedRequest = await prisma.request.update({
       where: { id: requestId },
@@ -636,7 +654,7 @@ export class RequestService {
               cancelledAt: now,
               cancelledById: userId,
               cancellationFee,
-              cancellationFeeReason: isLateCancellation ? LATE_CANCELLATION_REASON : null,
+              cancellationFeeReason: storedCancellationReason,
             }
           : {}),
       },
@@ -668,10 +686,13 @@ export class RequestService {
         `${senderName} confirmed the request. OTP is ready.`,
       );
     } else if (status === 'cancelled') {
+      const reasonText = normalizedCancellationReason
+        ? `. Reason: ${normalizedCancellationReason}`
+        : '';
       await NotificationService.createNotification(
         updatedRequest.receiverId,
         'meet_canceled',
-        `${senderName} cancelled your meet`,
+        `${senderName} cancelled your meet${reasonText}`,
       );
       if (cancellationFee > 0) {
         await NotificationService.createNotification(
@@ -704,9 +725,11 @@ export class RequestService {
       categoryLabel: updatedRequest.categoryLabel,
       meetLocation: updatedRequest.meetLocation,
       fromDateTime: updatedRequest.fromDateTime.toISOString(),
-      toDateTime: updatedRequest.toDateTime.toISOString(),
+      toDateTime: updatedRequest.toDateTime?.toISOString() ?? null,
       message: updatedRequest.message ?? '',
       ...beneficiaryFields(updatedRequest),
+      readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,
+      readyToPayTip: updatedRequest.readyToPayTip,
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
       otp: isSender ? null : updatedRequest.otp,
