@@ -858,7 +858,7 @@ export class RequestService {
 
     const result = {
       id: updatedRequest.id,
-      direction: (isSender ? 'sent' : 'received') as const,
+      direction: (isSender ? 'sent' : 'received') as 'sent' | 'received',
       mateUserId: partner.id,
       mateName: partner.profile?.fullName ?? partner.name ?? 'Anonymous',
       mateTenureId: partner.tenureId ?? 'Not assigned',

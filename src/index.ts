@@ -3,6 +3,7 @@ import { env } from './config/env';
 import { connectDB, prisma } from './config/database';
 import { logger } from './utils/logger';
 import { initWebSocket } from './services/websocket.service';
+import { seedCategories } from './utils/seed';
 
 
 // Standard Uncaught Exception handler
@@ -20,6 +21,7 @@ let server: ReturnType<typeof app.listen>;
 const boot = async () => {
   // 1. Verify DB connection
   await connectDB();
+  await seedCategories();
 
   // 2. Bind port and start serving traffic
   server = app.listen(env.PORT, () => {

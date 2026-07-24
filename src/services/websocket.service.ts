@@ -100,6 +100,12 @@ export function initWebSocket(server: HttpServer) {
         ws.close(4001, 'Unauthorized');
         return;
       }
+      const requestId = parseInt(reqIdStr, 10);
+      if (isNaN(requestId)) {
+        ws.send(JSON.stringify({ error: 'Invalid requestId' }));
+        ws.close(4000, 'Bad Request');
+        return;
+      }
 
       // Verify user has access to request
       const meetRequest = await prisma.request.findUnique({

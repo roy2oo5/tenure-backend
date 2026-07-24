@@ -4,6 +4,7 @@ import requestRoutes from './request.routes';
 import uploadRoutes from './upload.routes';
 import notificationRoutes from './notification.routes';
 import reportRoutes from './report.routes';
+import categoryRoutes from './category.routes';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/requests', requestRoutes);
 router.use('/upload', uploadRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/reports', reportRoutes);
+router.use('/categories', categoryRoutes);
 
 export default router;
