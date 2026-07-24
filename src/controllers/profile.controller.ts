@@ -63,4 +63,29 @@ export class ProfileController {
       next(error);
     }
   }
+
+  /**
+   * Update current user's profile location coordinates
+   */
+  public static async updateLocation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      const { latitude, longitude } = req.body;
+      if (latitude == null || longitude == null) {
+        return next(new AppError('Latitude and longitude are required.', 400));
+      }
+      const profile = await ProfileService.updateLocation(req.user.id, {
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+      });
+      res.status(200).json({
+        status: 'success',
+        data: { profile },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

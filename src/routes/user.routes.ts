@@ -446,6 +446,7 @@ router.get('/blocked', protect, BlockController.getBlocked);
  */
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
+router.patch('/profile/location', protect, ProfileController.updateLocation);
 router.post(
   '/profile/aadhaar-verification',
   protect,

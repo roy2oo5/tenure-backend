@@ -368,4 +368,24 @@ export class ProfileService {
       },
     });
   }
+
+  /**
+   * Update coordinates for a user profile
+   */
+  public static async updateLocation(
+    userId: string,
+    location: { latitude: number; longitude: number },
+  ): Promise<Profile> {
+    const profile = await prisma.profile.findUnique({ where: { userId } });
+    if (!profile) {
+      throw new AppError('Profile not found', 404);
+    }
+    return prisma.profile.update({
+      where: { userId },
+      data: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+      },
+    });
+  }
 }
