@@ -8,8 +8,15 @@ export class BlockController {
       if (!req.user) {
         return next(new AppError('You are not authenticated', 401));
       }
-      const { blockedId } = req.body;
-      if (!blockedId) {
+      const blockedIdValue = req.body.blockedId;
+      const blockedId = Number(blockedIdValue);
+      if (
+        blockedIdValue === null ||
+        blockedIdValue === undefined ||
+        blockedIdValue === '' ||
+        !Number.isInteger(blockedId) ||
+        blockedId <= 0
+      ) {
         return next(new AppError('Please provide a blockedId', 400));
       }
 
@@ -29,8 +36,15 @@ export class BlockController {
       if (!req.user) {
         return next(new AppError('You are not authenticated', 401));
       }
-      const { blockedId } = req.body;
-      if (!blockedId) {
+      const blockedIdValue = req.body.blockedId;
+      const blockedId = Number(blockedIdValue);
+      if (
+        blockedIdValue === null ||
+        blockedIdValue === undefined ||
+        blockedIdValue === '' ||
+        !Number.isInteger(blockedId) ||
+        blockedId <= 0
+      ) {
         return next(new AppError('Please provide a blockedId', 400));
       }
 

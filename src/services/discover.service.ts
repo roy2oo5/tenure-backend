@@ -239,12 +239,22 @@ function isDiscoverableProfile(profile: Profile): boolean {
   return true;
 }
 
+function isInstantDiscoverableProfile(profile: Profile): boolean {
+  const name = profile.fullName?.trim() ?? '';
+  return Boolean(name && name.toLowerCase() !== 'anonymous' && !PLACEHOLDER_NAME.test(name));
+}
+
 function getProfileAvatar(profile: Profile): string | null {
   const profilePhoto = profile.profilePhoto?.trim();
   if (profilePhoto) {
     return profilePhoto;
   }
   return profile.gallery.find((uri) => uri.trim()) ?? null;
+}
+
+function hasUserProvidedEmail(email?: string | null): boolean {
+  const normalized = email?.trim().toLowerCase();
+  return Boolean(normalized && !/^phone_\d+@tenure\.app$/.test(normalized));
 }
 
 function matchesTextQuery(profile: Profile, rawQuery: string): boolean {
@@ -303,7 +313,7 @@ function toDiscoverMate(
     bestTime: profile.bestTime,
     aadhaarVerified: profile.aadhaarVerified,
     phoneAdded: Boolean(profile.user?.phone?.trim()),
-    emailAdded: Boolean(profile.user?.email?.trim()),
+    emailAdded: hasUserProvidedEmail(profile.user?.email),
     livePhotoAdded,
     gallery,
     instagram: profile.instagram,
@@ -484,7 +494,6 @@ export class DiscoverService {
       },
       profileVisibility: true,
       instantAvailable: true,
-      categories: { isEmpty: false },
       user: {
         isActive: true,
       },
@@ -501,7 +510,7 @@ export class DiscoverService {
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
     const filteredProfiles = profiles
-      .filter(isDiscoverableProfile)
+      .filter(isInstantDiscoverableProfile)
       .filter((profile) => profileMatchesCategory(profile.categories, input.category))
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))

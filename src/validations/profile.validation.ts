@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 const stringArray = z.array(z.string().min(1)).optional().nullable();
 const MAX_HOURLY_RATE = 1199;
+const nullableNumber = (schema: z.ZodNumber) =>
+  z.preprocess((arg) => {
+    if (arg === null || arg === undefined || arg === '') {
+      return null;
+    }
+    return typeof arg === 'string' ? Number(arg) : arg;
+  }, schema.optional().nullable());
 
 export const createProfileSchema = z.object({
   body: z.object({
@@ -19,21 +26,29 @@ export const createProfileSchema = z.object({
     state: z.string().min(1, 'State is required'),
     district: z.string().min(1, 'District is required'),
     pinCode: z.string().min(1, 'PIN Code is required'),
-    latitude: z.number().min(-90).max(90).optional().nullable(),
-    longitude: z.number().min(-180).max(180).optional().nullable(),
+    latitude: nullableNumber(z.number().min(-90).max(90)),
+    longitude: nullableNumber(z.number().min(-180).max(180)),
     languages: z
       .array(z.string().min(1, 'Language cannot be empty'))
       .min(1, 'At least one language is required'),
     categories: z.array(z.string().min(1, 'Category name cannot be empty')).optional().nullable(),
-    hourlyRate: z
-      .number()
-      .min(0, 'Hourly rate must be a non-negative number')
-      .max(MAX_HOURLY_RATE, `Hourly rate must be ${MAX_HOURLY_RATE} or less`)
-      .optional()
-      .nullable(),
+    hourlyRate: z.preprocess(
+      (arg) => {
+        if (arg === null || arg === undefined || arg === '') {
+          return null;
+        }
+        return typeof arg === 'string' ? Number(arg) : arg;
+      },
+      z
+        .number()
+        .min(0, 'Hourly rate must be a non-negative number')
+        .max(MAX_HOURLY_RATE, `Hourly rate must be ${MAX_HOURLY_RATE} or less`)
+        .optional()
+        .nullable(),
+    ),
     categoryRates: z
       .record(
-        z
+        z.coerce
           .number()
           .positive('Category rate must be greater than zero')
           .max(MAX_HOURLY_RATE, `Category rate must be ${MAX_HOURLY_RATE} or less`),
@@ -85,8 +100,6 @@ export const verifyAadhaarSchema = z.object({
       .transform((value) => value.replace(/\s+/g, ''))
       .pipe(z.string().regex(/^\d{12}$/, 'Enter a valid 12-digit Aadhaar number')),
     fullName: z.string().min(1, 'Full name is required'),
-    dob: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format'),
+    dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format'),
   }),
 });

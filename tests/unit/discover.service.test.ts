@@ -196,6 +196,60 @@ describe('DiscoverService', () => {
     expect(results[0].instantAvailable).toBe(true);
   });
 
+  it('lists instant mates even when their browse profile is not fully completed', async () => {
+    const profiles = [
+      {
+        userId: 9,
+        fullName: 'User 1',
+        profilePhoto: null,
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Woman',
+        dob: new Date('1998-01-01'),
+        categories: [],
+        hourlyRate: null,
+        categoryRates: {},
+        languages: ['English'],
+        about: 'Ready now',
+        availableDays: [],
+        availableTimeRange: null,
+        bestTime: null,
+        aadhaarVerified: false,
+        gallery: [],
+        instagram: null,
+        facebook: null,
+        youtube: null,
+        website: null,
+        instantAvailable: true,
+        instantAvailableUntil: null,
+        instantCategories: [],
+        instantNote: null,
+        user: {
+          tenureId: 'RD123',
+          email: 'ready@example.com',
+          phone: '9999999993',
+        },
+      },
+    ];
+
+    (prisma.profile.findMany as any).mockResolvedValue(profiles);
+
+    const results = await DiscoverService.getInstantMates(2, {});
+
+    expect(prisma.profile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.not.objectContaining({
+          categories: expect.anything(),
+        }),
+      }),
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].fullName).toBe('User 1');
+    expect(results[0].category).toBe('Support');
+    expect(results[0].profilePhoto).toBeNull();
+    expect(results[0].instantAvailable).toBe(true);
+  });
+
   it('returns distance from the searching user when coordinates are provided', async () => {
     const profiles = [
       {

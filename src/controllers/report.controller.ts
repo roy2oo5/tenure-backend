@@ -8,7 +8,15 @@ export class ReportController {
       if (!req.user) {
         return next(new AppError('You are not authenticated', 401));
       }
-      const { targetId, category, message } = req.body;
+      const { category, message } = req.body;
+      const targetId =
+        req.body.targetId === null || req.body.targetId === undefined || req.body.targetId === ''
+          ? null
+          : Number(req.body.targetId);
+
+      if (targetId !== null && (!Number.isInteger(targetId) || targetId <= 0)) {
+        return next(new AppError('Invalid reported user ID', 400));
+      }
 
       const report = await ReportService.createReport(req.user.id, {
         targetId,

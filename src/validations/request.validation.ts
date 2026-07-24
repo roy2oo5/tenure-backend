@@ -1,14 +1,25 @@
 import { z } from 'zod';
 
+const nullableNumber = (schema: z.ZodNumber) =>
+  z.preprocess((arg) => {
+    if (arg === null || arg === undefined || arg === '') {
+      return null;
+    }
+    return typeof arg === 'string' ? Number(arg) : arg;
+  }, schema.optional().nullable());
+
 export const createRequestSchema = z.object({
   body: z
     .object({
-      receiverId: z.number().int('Invalid mate user ID format'),
+      receiverId: z.coerce
+        .number()
+        .int('Invalid mate user ID format')
+        .positive('Invalid mate user ID format'),
       categoryId: z.string().min(1, 'Category ID is required'),
       categoryLabel: z.string().min(1, 'Category label is required'),
       meetLocation: z.string().min(1, 'Meeting location is required'),
-      meetLocationLatitude: z.number().min(-90).max(90).optional().nullable(),
-      meetLocationLongitude: z.number().min(-180).max(180).optional().nullable(),
+      meetLocationLatitude: nullableNumber(z.number().min(-90).max(90)),
+      meetLocationLongitude: nullableNumber(z.number().min(-180).max(180)),
       fromDateTime: z.preprocess(
         (arg) => (typeof arg === 'string' ? new Date(arg) : arg),
         z.date({

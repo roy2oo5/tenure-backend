@@ -286,12 +286,15 @@ export class ProfileService {
       body: form,
     });
 
-    const responseBody = (await response.json().catch(() => null)) as { match_type?: unknown } | null;
+    const responseBody = (await response.json().catch(() => null)) as {
+      match_type?: unknown;
+    } | null;
     if (!response.ok) {
       throw new AppError('Aadhaar verification failed. Please try again.', response.status);
     }
 
-    const matchType = typeof responseBody?.match_type === 'string' ? responseBody.match_type : 'no_match';
+    const matchType =
+      typeof responseBody?.match_type === 'string' ? responseBody.match_type : 'no_match';
     if (matchType === 'full_match') {
       const updatedProfile = await prisma.profile.update({
         where: { userId },
@@ -311,9 +314,7 @@ export class ProfileService {
       profile,
       matchType,
       message:
-        matchType === 'partial_match'
-          ? 'Details incorrect, cross check'
-          : 'Details not matched',
+        matchType === 'partial_match' ? 'Details incorrect, cross check' : 'Details not matched',
     };
   }
 

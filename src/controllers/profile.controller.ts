@@ -1,22 +1,40 @@
 import { Request, Response, NextFunction } from 'express';
 import { ProfileService } from '../services/profile.service';
 import { AppError } from '../utils/app-error';
+import { prisma } from '../config/database';
+
+async function profileWithTenureId(userId: number, profile: object) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { tenureId: true },
+  });
+
+  return {
+    ...profile,
+    tenureId: user?.tenureId ?? null,
+  };
+}
 
 export class ProfileController {
   /**
    * Upsert the current user's profile
    */
-  public static async upsertMyProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async upsertMyProfile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
       }
 
       const profile = await ProfileService.upsertProfile(req.user.id, req.body);
+      const responseProfile = await profileWithTenureId(req.user.id, profile);
 
       res.status(200).json({
         status: 'success',
-        data: { profile },
+        data: { profile: responseProfile },
       });
     } catch (error) {
       next(error);
@@ -37,17 +55,22 @@ export class ProfileController {
       if (!profile) {
         return next(new AppError('Profile not found for this user.', 404));
       }
+      const responseProfile = await profileWithTenureId(req.user.id, profile);
 
       res.status(200).json({
         status: 'success',
-        data: { profile },
+        data: { profile: responseProfile },
       });
     } catch (error) {
       next(error);
     }
   }
 
-  public static async verifyAadhaar(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async verifyAadhaar(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
@@ -67,7 +90,11 @@ export class ProfileController {
   /**
    * Update current user's profile location coordinates
    */
-  public static async updateLocation(req: Request, res: Response, next: NextFunction): Promise<void> {
+  public static async updateLocation(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));

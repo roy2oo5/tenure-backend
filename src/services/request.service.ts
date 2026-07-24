@@ -59,6 +59,27 @@ export type MappedRequest = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges: boolean;
   readyToPayTip: boolean;
+  requestHourlyRate: number;
+  mateGender?: string | null;
+  mateDob?: string | null;
+  mateLocation?: string | null;
+  mateCategories: string[];
+  mateCategoryRates: Record<string, number>;
+  mateHourlyRate: number | null;
+  mateLanguages: string[];
+  mateAvailableDays: string[];
+  mateAvailableTime?: string | null;
+  mateBestTime?: string | null;
+  mateVehicles: string[];
+  mateAbout?: string | null;
+  mateProfessions: string[];
+  mateQualification?: string | null;
+  mateBloodGroup?: string | null;
+  mateAadhaarVerified: boolean;
+  matePhoneAdded: boolean;
+  mateEmailAdded: boolean;
+  mateLivePhotoAdded: boolean;
+  mateGalleryPhotos: string[];
   status: FrontendRequestStatus;
   sentAt: string;
   sessionStatus?: string | null;
@@ -186,7 +207,7 @@ const getProfileAvatar = (
   return profile?.gallery?.find((uri) => uri.trim()) ?? '';
 };
 
-const categoryRatesRecord = (value: Profile['categoryRates']): Record<string, number> => {
+const categoryRatesRecord = (value?: Profile['categoryRates'] | null): Record<string, number> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
   }
@@ -221,6 +242,51 @@ const hourlyRateForRequest = (
   }
 
   return profile.hourlyRate ?? 50;
+};
+
+const profileLocation = (profile?: Profile | null): string | null => {
+  const parts = [profile?.district, profile?.state, profile?.country]
+    .map((value) => value?.trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+};
+
+const hasUserProvidedEmail = (email?: string | null): boolean => {
+  const normalized = email?.trim().toLowerCase();
+  return Boolean(normalized && !/^phone_\d+@tenure\.app$/.test(normalized));
+};
+
+const profileFields = (
+  user: {
+    phone?: string | null;
+    email?: string | null;
+    profile?: Profile | null;
+  },
+) => {
+  const profile = user.profile;
+  const gallery = profile?.gallery ?? [];
+  return {
+    mateGender: profile?.gender ?? null,
+    mateDob: profile?.dob?.toISOString() ?? null,
+    mateLocation: profileLocation(profile),
+    mateCategories: profile?.categories ?? [],
+    mateCategoryRates: categoryRatesRecord(profile?.categoryRates),
+    mateHourlyRate: profile?.hourlyRate ?? null,
+    mateLanguages: profile?.languages ?? [],
+    mateAvailableDays: profile?.availableDays ?? [],
+    mateAvailableTime: profile?.availableTimeRange ?? null,
+    mateBestTime: profile?.bestTime ?? null,
+    mateVehicles: profile?.vehicles ?? [],
+    mateAbout: profile?.about ?? null,
+    mateProfessions: profile?.professions ?? [],
+    mateQualification: profile?.qualification ?? null,
+    mateBloodGroup: profile?.bloodGroup ?? null,
+    mateAadhaarVerified: profile?.aadhaarVerified ?? false,
+    matePhoneAdded: Boolean(user.phone?.trim()),
+    mateEmailAdded: hasUserProvidedEmail(user.email),
+    mateLivePhotoAdded: gallery.some((uri) => uri.toLowerCase().includes('live-photo')),
+    mateGalleryPhotos: gallery,
+  };
 };
 
 const cancellationFields = (request: {
@@ -500,6 +566,8 @@ export class RequestService {
       ...beneficiaryFields(newRequest),
       readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
       readyToPayTip: newRequest.readyToPayTip,
+      requestHourlyRate: hourlyRateForRequest(receiver.profile, newRequest.categoryLabel),
+      ...profileFields(receiver),
       status: 'pending',
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
@@ -560,6 +628,8 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        requestHourlyRate: hourlyRateForRequest(req.receiver?.profile, req.categoryLabel),
+        ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
@@ -594,6 +664,8 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        requestHourlyRate: hourlyRateForRequest(req.receiver?.profile, req.categoryLabel),
+        ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
@@ -796,6 +868,11 @@ export class RequestService {
       ...beneficiaryFields(updatedRequest),
       readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,
       readyToPayTip: updatedRequest.readyToPayTip,
+      requestHourlyRate: hourlyRateForRequest(
+        updatedRequest.receiver.profile,
+        updatedRequest.categoryLabel,
+      ),
+      ...profileFields(partner),
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
       otp: isSender ? null : updatedRequest.otp,
