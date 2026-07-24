@@ -10,6 +10,8 @@ export type CreateRequestInput = {
   categoryId: string;
   categoryLabel: string;
   meetLocation: string;
+  meetLocationLatitude?: number | null;
+  meetLocationLongitude?: number | null;
   fromDateTime: Date;
   toDateTime?: Date | null;
   instantBooking?: boolean;
@@ -43,6 +45,8 @@ export type MappedRequest = {
   categoryId: string;
   categoryLabel: string;
   meetLocation: string;
+  meetLocationLatitude?: number | null;
+  meetLocationLongitude?: number | null;
   fromDateTime: string;
   toDateTime: string | null;
   instantBooking: boolean;
@@ -462,6 +466,8 @@ export class RequestService {
         categoryId: data.categoryId,
         categoryLabel: data.categoryLabel,
         meetLocation: data.meetLocation,
+        meetLocationLatitude: data.meetLocationLatitude ?? null,
+        meetLocationLongitude: data.meetLocationLongitude ?? null,
         fromDateTime: data.fromDateTime,
         toDateTime: data.toDateTime,
         instantBooking,
@@ -485,6 +491,8 @@ export class RequestService {
       categoryId: newRequest.categoryId,
       categoryLabel: newRequest.categoryLabel,
       meetLocation: newRequest.meetLocation,
+      meetLocationLatitude: newRequest.meetLocationLatitude,
+      meetLocationLongitude: newRequest.meetLocationLongitude,
       fromDateTime: newRequest.fromDateTime.toISOString(),
       toDateTime: newRequest.toDateTime?.toISOString() ?? null,
       ...instantRequestFields(newRequest),
@@ -543,6 +551,8 @@ export class RequestService {
         categoryId: req.categoryId,
         categoryLabel: req.categoryLabel,
         meetLocation: req.meetLocation,
+        meetLocationLatitude: req.meetLocationLatitude,
+        meetLocationLongitude: req.meetLocationLongitude,
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
         ...instantRequestFields(req),
@@ -575,6 +585,8 @@ export class RequestService {
         categoryId: req.categoryId,
         categoryLabel: req.categoryLabel,
         meetLocation: req.meetLocation,
+        meetLocationLatitude: req.meetLocationLatitude,
+        meetLocationLongitude: req.meetLocationLongitude,
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
         ...instantRequestFields(req),
@@ -775,6 +787,8 @@ export class RequestService {
       categoryId: updatedRequest.categoryId,
       categoryLabel: updatedRequest.categoryLabel,
       meetLocation: updatedRequest.meetLocation,
+      meetLocationLatitude: updatedRequest.meetLocationLatitude,
+      meetLocationLongitude: updatedRequest.meetLocationLongitude,
       fromDateTime: updatedRequest.fromDateTime.toISOString(),
       toDateTime: updatedRequest.toDateTime?.toISOString() ?? null,
       ...instantRequestFields(updatedRequest),

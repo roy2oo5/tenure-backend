@@ -161,10 +161,9 @@ export class SessionService {
       throw new AppError('You are not authorized to start a session for this request', 403);
     }
 
-    // Disabled for testing
-    // if (!otp || request.otp !== otp) {
-    //   throw new AppError('Invalid verification OTP code', 400);
-    // }
+    if (!_otp || request.otp !== _otp) {
+      throw new AppError('Invalid verification OTP code', 400);
+    }
 
     const existingSession = await prisma.session.findUnique({
       where: { requestId },

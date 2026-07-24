@@ -17,7 +17,7 @@ const formatUser = (user: User): UserWithoutPassword => {
   return userWithoutPassword;
 };
 
-const signToken = (id: string, email: string, role: Role): string => {
+const signToken = (id: string, email: string | null, role: Role): string => {
   const options: SignOptions = {
     expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
   };
@@ -37,8 +37,14 @@ const normalizePhone = (phone: string): string => {
 
 export class UserService {
   public static async register(data: Prisma.UserCreateInput): Promise<AuthResponse> {
+    if (!data.email || !data.password) {
+      throw new AppError('Please provide email and password', 400);
+    }
+    const email = data.email;
+    const password = data.password;
+
     const existingUser = await prisma.user.findUnique({
-      where: { email: data.email },
+      where: { email },
     });
 
     if (existingUser) {
@@ -56,7 +62,7 @@ export class UserService {
       data.phone = phone;
     }
 
-    const hashedPassword = await bcrypt.hash(data.password, 12);
+    const hashedPassword = await bcrypt.hash(password, 12);
 
     const newUser = await prisma.user.create({
       data: {
@@ -129,7 +135,7 @@ export class UserService {
       where: { email: data.email as string },
     });
 
-    if (!user || !(await bcrypt.compare(data.password as string, user.password))) {
+    if (!user || !user.password || !(await bcrypt.compare(data.password as string, user.password))) {
       throw new AppError('Incorrect email or password', 401);
     }
 
@@ -199,6 +205,10 @@ export class UserService {
 
     if (!user) {
       throw new AppError('User not found', 404);
+    }
+
+    if (!user.password) {
+      throw new AppError('Password is not set for this account', 400);
     }
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);

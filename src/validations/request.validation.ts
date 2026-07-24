@@ -7,6 +7,8 @@ export const createRequestSchema = z.object({
       categoryId: z.string().min(1, 'Category ID is required'),
       categoryLabel: z.string().min(1, 'Category label is required'),
       meetLocation: z.string().min(1, 'Meeting location is required'),
+      meetLocationLatitude: z.number().min(-90).max(90).optional().nullable(),
+      meetLocationLongitude: z.number().min(-180).max(180).optional().nullable(),
       fromDateTime: z.preprocess(
         (arg) => (typeof arg === 'string' ? new Date(arg) : arg),
         z.date({

@@ -99,6 +99,20 @@ export function initWebSocket(server: HttpServer) {
             return;
           }
 
+          if (type === 'location_update') {
+            const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
+            const recipientSocket = connections.get(receiverId);
+            if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
+              recipientSocket.send(JSON.stringify({
+                event: 'location_update',
+                userId,
+                latitude: Number(data.latitude),
+                longitude: Number(data.longitude),
+              }));
+            }
+            return;
+          }
+
           if (!content) {
             ws.send(JSON.stringify({ error: 'Content is required' }));
             return;

@@ -14,9 +14,9 @@ enum Role {
 
 model User {
   id               String         @id @default(uuid())
-  email            String         @unique
+  email            String?        @unique
   phone            String?        @unique @map("phone")
-  password         String
+  password         String?
   name             String?
   role             Role           @default(USER)
   isActive         Boolean        @default(true) @map("is_active")
@@ -115,6 +115,8 @@ model Request {
   categoryId              String        @map("category_id")
   categoryLabel           String        @map("category_label")
   meetLocation            String        @map("meet_location")
+  meetLocationLatitude    Float?        @map("meet_location_latitude")
+  meetLocationLongitude   Float?        @map("meet_location_longitude")
   fromDateTime            DateTime      @map("from_date_time")
   toDateTime              DateTime?     @map("to_date_time")
   instantBooking          Boolean       @default(false) @map("instant_booking")
