@@ -9,6 +9,9 @@ import { logger } from '../utils/logger';
 // Store active connections: map of userId -> WebSocket
 const connections = new Map<number, WebSocket>();
 
+// Store active global connections: map of userId -> Set of WebSockets
+const globalConnections = new Map<number, Set<WebSocket>>();
+
 export function initWebSocket(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -16,7 +19,12 @@ export function initWebSocket(server: HttpServer) {
     const parsed = url.parse(request.url || '');
     const pathname = parsed.pathname;
 
-    if (pathname === '/chat' || pathname === '/chat/') {
+    if (
+      pathname === '/chat' ||
+      pathname === '/chat/' ||
+      pathname === '/ws' ||
+      pathname === '/ws/'
+    ) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -29,18 +37,11 @@ export function initWebSocket(server: HttpServer) {
     try {
       const parsedUrl = url.parse(request.url || '', true);
       const token = parsedUrl.query.token as string;
-      const reqIdStr = parsedUrl.query.requestId as string;
+      const pathname = parsedUrl.pathname;
 
-      if (!token || !reqIdStr) {
-        ws.send(JSON.stringify({ error: 'Missing token or requestId' }));
+      if (!token) {
+        ws.send(JSON.stringify({ error: 'Missing token' }));
         ws.close(4001, 'Unauthorized');
-        return;
-      }
-
-      const requestId = parseInt(reqIdStr, 10);
-      if (isNaN(requestId)) {
-        ws.send(JSON.stringify({ error: 'Invalid requestId format' }));
-        ws.close(4000, 'Bad Request');
         return;
       }
 
@@ -58,6 +59,45 @@ export function initWebSocket(server: HttpServer) {
       if (!userId) {
         ws.send(JSON.stringify({ error: 'Invalid token payload' }));
         ws.close(4003, 'Unauthorized');
+        return;
+      }
+
+      if (pathname === '/ws' || pathname === '/ws/') {
+        // Register global connection
+        if (!globalConnections.has(userId)) {
+          globalConnections.set(userId, new Set<WebSocket>());
+        }
+        globalConnections.get(userId)!.add(ws);
+        logger.info(`WebSocket global client connected: user=${userId}`);
+
+        ws.on('message', (messageData: string) => {
+          try {
+            const data = JSON.parse(messageData);
+            if (data && data.type === 'ping') {
+              ws.send(JSON.stringify({ type: 'pong' }));
+            }
+          } catch (e) {}
+        });
+
+        ws.on('close', () => {
+          const userSockets = globalConnections.get(userId);
+          if (userSockets) {
+            userSockets.delete(ws);
+            if (userSockets.size === 0) {
+              globalConnections.delete(userId);
+            }
+          }
+          logger.info(`WebSocket global client disconnected: user=${userId}`);
+        });
+
+        return;
+      }
+
+      // From here on, it must be '/chat' which requires requestId
+      const reqIdStr = parsedUrl.query.requestId as string;
+      if (!reqIdStr) {
+        ws.send(JSON.stringify({ error: 'Missing requestId' }));
+        ws.close(4001, 'Unauthorized');
         return;
       }
 
@@ -192,5 +232,19 @@ export function sendToUser(userId: number, data: any): boolean {
     return true;
   }
   return false;
+}
+
+export function sendGlobalToUser(userId: number, data: any): boolean {
+  const sockets = globalConnections.get(userId);
+  let sent = false;
+  if (sockets) {
+    for (const ws of sockets) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
+        sent = true;
+      }
+    }
+  }
+  return sent;
 }
 

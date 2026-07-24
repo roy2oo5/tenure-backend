@@ -2,7 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
-import { sendToUser } from './websocket.service';
+import { sendToUser, sendGlobalToUser } from './websocket.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type CreateRequestInput = {
@@ -547,9 +547,9 @@ export class RequestService {
       },
     });
 
-    return {
+    const result = {
       id: newRequest.id,
-      direction: 'sent',
+      direction: 'sent' as const,
       mateUserId: receiver.id,
       mateName: receiver.profile?.fullName ?? receiver.name ?? 'Anonymous',
       mateTenureId: receiver.tenureId ?? 'Not assigned',
@@ -568,13 +568,20 @@ export class RequestService {
       readyToPayTip: newRequest.readyToPayTip,
       requestHourlyRate: hourlyRateForRequest(receiver.profile, newRequest.categoryLabel),
       ...profileFields(receiver),
-      status: 'pending',
+      status: 'pending' as const,
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
       requesterGender: null,
       ...cancellationFields(newRequest),
       ...cancellationPreviewFields(newRequest, receiver.profile),
     };
+
+    sendGlobalToUser(data.receiverId, {
+      event: 'request_created',
+      requestId: newRequest.id,
+    });
+
+    return result;
   }
 
   public static async listUserRequests(
@@ -849,9 +856,9 @@ export class RequestService {
       );
     }
 
-    return {
+    const result = {
       id: updatedRequest.id,
-      direction: isSender ? 'sent' : 'received',
+      direction: (isSender ? 'sent' : 'received') as const,
       mateUserId: partner.id,
       mateName: partner.profile?.fullName ?? partner.name ?? 'Anonymous',
       mateTenureId: partner.tenureId ?? 'Not assigned',
@@ -880,6 +887,13 @@ export class RequestService {
       ...cancellationFields(updatedRequest),
       ...cancellationPreviewFields(updatedRequest, updatedRequest.receiver.profile),
     };
+
+    sendGlobalToUser(partner.id, {
+      event: 'request_updated',
+      requestId: updatedRequest.id,
+    });
+
+    return result;
   }
 
   public static async getRequestMessages(userId: number, requestId: number) {
