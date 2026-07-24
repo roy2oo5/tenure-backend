@@ -14,6 +14,9 @@ vi.mock('@/config/database', () => ({
       upsert: vi.fn(),
       deleteMany: vi.fn(),
     },
+    session: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -215,5 +218,57 @@ describe('DiscoverService', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].distanceKm).toBe(0);
+  });
+
+  it('keeps live mates discoverable and marks them busy today', async () => {
+    const profiles = [
+      {
+        userId: 'live-user',
+        tenureId: 'LV123',
+        fullName: 'Live User',
+        profilePhoto: 'https://example.com/live.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Woman',
+        dob: new Date('1998-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 120,
+        categoryRates: {},
+        languages: ['English'],
+        about: null,
+        professions: [],
+        availableDays: [],
+        availableTimeRange: null,
+        bestTime: null,
+        aadhaarVerified: true,
+        gallery: [],
+        instagram: null,
+        facebook: null,
+        youtube: null,
+        website: null,
+        instantAvailable: true,
+        instantAvailableUntil: null,
+        instantCategories: [],
+        instantNote: null,
+      },
+    ];
+
+    (prisma.profile.findMany as any).mockResolvedValue(profiles);
+    (prisma.session.findMany as any).mockResolvedValue([
+      {
+        senderId: 'someone-else',
+        receiverId: 'live-user',
+        status: 'RUNNING',
+      },
+    ]);
+
+    const results = await DiscoverService.searchMates('current-user', {
+      q: 'live',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].fullName).toBe('Live User');
+    expect(results[0].busyToday).toBe(true);
+    expect(results[0].activeSessionStatus).toBe('RUNNING');
   });
 });

@@ -12,6 +12,8 @@ export type CreateRequestInput = {
   meetLocation: string;
   fromDateTime: Date;
   toDateTime?: Date | null;
+  instantBooking?: boolean;
+  responseDeadlineAt?: Date | null;
   message?: string | null;
   bookingFor?: 'self' | 'someone_else';
   beneficiaryName?: string | null;
@@ -43,6 +45,8 @@ export type MappedRequest = {
   meetLocation: string;
   fromDateTime: string;
   toDateTime: string | null;
+  instantBooking: boolean;
+  responseDeadlineAt: string | null;
   message: string;
   bookingFor: 'self' | 'someone_else';
   beneficiaryName?: string | null;
@@ -73,6 +77,7 @@ const EXPIRABLE_STATUSES = [
   RequestStatus.CONFIRMED,
 ] as RequestStatus[];
 const DAY_KEYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
+const INSTANT_RESPONSE_WINDOWS_MINUTES = [10, 20, 30] as const;
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
   switch (status) {
@@ -125,19 +130,27 @@ const isExpirableStatus = (status: RequestStatus): boolean => EXPIRABLE_STATUSES
 const shouldExpireRequest = (request: {
   status: RequestStatus;
   toDateTime?: Date | null;
+  responseDeadlineAt?: Date | null;
   session?: unknown | null;
 }): boolean => {
-  return Boolean(
+  const responseTimedOut = Boolean(
+    request.status === RequestStatus.PENDING &&
+    request.responseDeadlineAt &&
+    request.responseDeadlineAt.getTime() <= Date.now(),
+  );
+  const scheduledWindowEnded = Boolean(
     isExpirableStatus(request.status) &&
     request.toDateTime &&
     request.toDateTime.getTime() <= Date.now() &&
     !request.session,
   );
+  return responseTimedOut || scheduledWindowEnded;
 };
 
 const effectiveRequestStatus = (request: {
   status: RequestStatus;
   toDateTime?: Date | null;
+  responseDeadlineAt?: Date | null;
   session?: unknown | null;
 }): RequestStatus => {
   return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
@@ -230,6 +243,14 @@ const beneficiaryFields = (request: {
   beneficiaryPhone: request.beneficiaryPhone ?? null,
   beneficiaryRelation: request.beneficiaryRelation ?? null,
   beneficiaryNote: request.beneficiaryNote ?? null,
+});
+
+const instantRequestFields = (request: {
+  instantBooking?: boolean | null;
+  responseDeadlineAt?: Date | null;
+}) => ({
+  instantBooking: Boolean(request.instantBooking),
+  responseDeadlineAt: request.responseDeadlineAt?.toISOString() ?? null,
 });
 
 const normalizeOptionalText = (value?: string | null): string | null => {
@@ -342,6 +363,7 @@ export class RequestService {
       id: string;
       status: RequestStatus;
       toDateTime?: Date | null;
+      responseDeadlineAt?: Date | null;
       session?: unknown | null;
     }>,
   ): Promise<void> {
@@ -389,8 +411,32 @@ export class RequestService {
       throw new AppError('Cannot send request to a blocked user or if blocked by them', 400);
     }
 
-    if (!requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)) {
+    const instantBooking = Boolean(data.instantBooking);
+
+    if (
+      !instantBooking &&
+      !requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)
+    ) {
       throw new AppError('Please choose a meeting time within this companion availability', 400);
+    }
+
+    if (instantBooking && !receiver.profile?.instantAvailable) {
+      throw new AppError('This companion is not ready now', 400);
+    }
+
+    const responseDeadlineAt = instantBooking
+      ? (data.responseDeadlineAt ?? new Date(Date.now() + 10 * 60 * 1000))
+      : null;
+    if (responseDeadlineAt) {
+      const responseMinutes = Math.round((responseDeadlineAt.getTime() - Date.now()) / (60 * 1000));
+      if (
+        responseMinutes <= 0 ||
+        !INSTANT_RESPONSE_WINDOWS_MINUTES.some(
+          (minutes) => Math.abs(minutes - responseMinutes) <= 1,
+        )
+      ) {
+        throw new AppError('Response time must be 10, 20, or 30 minutes', 400);
+      }
     }
 
     const bookingFor = data.bookingFor === 'someone_else' ? 'someone_else' : 'self';
@@ -418,6 +464,8 @@ export class RequestService {
         meetLocation: data.meetLocation,
         fromDateTime: data.fromDateTime,
         toDateTime: data.toDateTime,
+        instantBooking,
+        responseDeadlineAt,
         message: data.message ?? '',
         bookingFor,
         ...beneficiaryData,
@@ -439,6 +487,7 @@ export class RequestService {
       meetLocation: newRequest.meetLocation,
       fromDateTime: newRequest.fromDateTime.toISOString(),
       toDateTime: newRequest.toDateTime?.toISOString() ?? null,
+      ...instantRequestFields(newRequest),
       message: newRequest.message ?? '',
       ...beneficiaryFields(newRequest),
       readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
@@ -496,6 +545,7 @@ export class RequestService {
         meetLocation: req.meetLocation,
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
+        ...instantRequestFields(req),
         message: req.message ?? '',
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
@@ -527,6 +577,7 @@ export class RequestService {
         meetLocation: req.meetLocation,
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
+        ...instantRequestFields(req),
         message: req.message ?? '',
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
@@ -726,6 +777,7 @@ export class RequestService {
       meetLocation: updatedRequest.meetLocation,
       fromDateTime: updatedRequest.fromDateTime.toISOString(),
       toDateTime: updatedRequest.toDateTime?.toISOString() ?? null,
+      ...instantRequestFields(updatedRequest),
       message: updatedRequest.message ?? '',
       ...beneficiaryFields(updatedRequest),
       readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,

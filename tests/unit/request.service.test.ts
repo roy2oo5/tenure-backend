@@ -109,6 +109,64 @@ describe('RequestService', () => {
       expect(result.mateAvatar).toBe('https://example.com/avatar.jpg');
       expect(result.status).toBe('pending');
     });
+
+    it('should create an instant request with a response deadline', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
+
+      const responseDeadlineAt = new Date('2027-06-20T08:20:00.000Z');
+      const mockReceiver = {
+        id: 'user-id-2',
+        name: 'Ready User',
+        profile: {
+          fullName: 'Ready User Profile',
+          tenureId: 'IN123',
+          profilePhoto: '',
+          gallery: [],
+          instantAvailable: true,
+        },
+      };
+      const mockRequest = {
+        id: 'instant-req-id',
+        senderId: 'user-id-1',
+        receiverId: 'user-id-2',
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Current GPS',
+        fromDateTime: new Date('2027-06-20T08:00:00.000Z'),
+        toDateTime: null,
+        instantBooking: true,
+        responseDeadlineAt,
+        message: 'Instant request',
+        status: RequestStatus.PENDING,
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
+      (prisma.request.create as any).mockResolvedValue(mockRequest);
+
+      const result = await RequestService.createRequest('user-id-1', {
+        receiverId: 'user-id-2',
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Current GPS',
+        fromDateTime: new Date('2027-06-20T08:00:00.000Z'),
+        instantBooking: true,
+        responseDeadlineAt,
+        message: 'Instant request',
+      });
+
+      expect(prisma.request.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          instantBooking: true,
+          responseDeadlineAt,
+          toDateTime: undefined,
+        }),
+      });
+      expect(result.instantBooking).toBe(true);
+      expect(result.responseDeadlineAt).toBe(responseDeadlineAt.toISOString());
+    });
   });
 
   describe('listUserRequests', () => {

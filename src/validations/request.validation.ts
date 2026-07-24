@@ -23,6 +23,16 @@ export const createRequestSchema = z.object({
           .optional()
           .nullable(),
       ),
+      instantBooking: z.boolean().optional().default(false),
+      responseDeadlineAt: z.preprocess(
+        (arg) => (typeof arg === 'string' ? (arg.trim() ? new Date(arg) : null) : arg),
+        z
+          .date({
+            invalid_type_error: 'Invalid response deadline format',
+          })
+          .optional()
+          .nullable(),
+      ),
       message: z.string().optional().nullable(),
       bookingFor: z.enum(['self', 'someone_else']).default('self'),
       beneficiaryName: z.string().trim().optional().nullable(),
@@ -46,13 +56,6 @@ export const createRequestSchema = z.object({
           code: z.ZodIssueCode.custom,
           path: ['beneficiaryName'],
           message: 'Person name is required',
-        });
-      }
-      if (!body.beneficiaryPhone?.trim()) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['beneficiaryPhone'],
-          message: 'Person phone is required',
         });
       }
     }),

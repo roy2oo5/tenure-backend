@@ -1,4 +1,4 @@
-import { Prisma, Profile } from '@prisma/client';
+import { Prisma, Profile, SessionStatus } from '@prisma/client';
 import { prisma } from '../config/database';
 import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
 import { AppError } from '../utils/app-error';
@@ -54,6 +54,8 @@ export type DiscoverMateResult = {
   latitude: number | null;
   longitude: number | null;
   saved: boolean;
+  busyToday: boolean;
+  activeSessionStatus: SessionStatus | null;
 };
 
 type PublicProfile = Profile & {
@@ -270,11 +272,12 @@ function toDiscoverMate(
   profile: PublicProfile,
   input: DiscoverSearchInput = {},
   savedMateIds = new Set<string>(),
+  activeSessionByUserId = new Map<string, SessionStatus>(),
 ): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
-  const livePhotoAdded = profile.gallery.some((uri) =>
-    uri.toLowerCase().includes('live-photo'),
-  );
+  const gallery = profile.gallery ?? [];
+  const livePhotoAdded = gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
+  const activeSessionStatus = activeSessionByUserId.get(profile.userId) ?? null;
   return {
     userId: profile.userId,
     tenureId: profile.tenureId,
@@ -288,26 +291,26 @@ function toDiscoverMate(
     categories: profile.categories,
     hourlyRate: rateForCategory(profile, category),
     categoryRates: categoryRatesRecord(profile.categoryRates),
-    languages: profile.languages,
+    languages: profile.languages ?? [],
     about: profile.about,
-    professions: profile.professions,
+    professions: profile.professions ?? [],
     qualification: profile.qualification,
     bloodGroup: profile.bloodGroup,
-    availableDays: profile.availableDays,
+    availableDays: profile.availableDays ?? [],
     availableTimeRange: profile.availableTimeRange,
     bestTime: profile.bestTime,
     aadhaarVerified: profile.aadhaarVerified,
     phoneAdded: Boolean(profile.user?.phone?.trim()),
     emailAdded: Boolean(profile.user?.email?.trim()),
     livePhotoAdded,
-    gallery: profile.gallery,
+    gallery,
     instagram: profile.instagram,
     facebook: profile.facebook,
     youtube: profile.youtube,
     website: profile.website,
     instantAvailable: profile.instantAvailable,
     instantAvailableUntil: profile.instantAvailableUntil,
-    instantCategories: profile.instantCategories,
+    instantCategories: profile.instantCategories ?? [],
     instantNote: profile.instantNote,
     distanceKm: distanceKmBetween(
       input.latitude,
@@ -318,6 +321,8 @@ function toDiscoverMate(
     latitude: profile.latitude,
     longitude: profile.longitude,
     saved: savedMateIds.has(profile.userId),
+    busyToday: activeSessionStatus != null,
+    activeSessionStatus,
   };
 }
 
@@ -327,6 +332,37 @@ async function savedMateIdsForUser(userId: string): Promise<Set<string>> {
     select: { mateUserId: true },
   });
   return new Set(rows.map((row) => row.mateUserId));
+}
+
+async function activeSessionStatusesForUsers(
+  userIds: string[],
+): Promise<Map<string, SessionStatus>> {
+  if (!userIds.length) {
+    return new Map();
+  }
+
+  const sessions = await prisma.session.findMany({
+    where: {
+      status: { not: SessionStatus.ENDED },
+      OR: [{ senderId: { in: userIds } }, { receiverId: { in: userIds } }],
+    },
+    select: {
+      senderId: true,
+      receiverId: true,
+      status: true,
+    },
+  });
+
+  const statuses = new Map<string, SessionStatus>();
+  for (const session of sessions) {
+    if (userIds.includes(session.senderId)) {
+      statuses.set(session.senderId, session.status);
+    }
+    if (userIds.includes(session.receiverId)) {
+      statuses.set(session.receiverId, session.status);
+    }
+  }
+  return statuses;
 }
 
 export class DiscoverService {
@@ -368,15 +404,20 @@ export class DiscoverService {
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
-
-    return profiles
+    const filteredProfiles = profiles
       .filter(isDiscoverableProfile)
       .filter((profile) => profileMatchesCategory(profile.categories, input.category))
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
-      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input));
+    const activeSessionByUserId = await activeSessionStatusesForUsers(
+      filteredProfiles.map((profile) => profile.userId),
+    );
+
+    return filteredProfiles.map((profile) =>
+      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    );
   }
 
   public static async getMatePublicProfile(
@@ -414,7 +455,8 @@ export class DiscoverService {
     }
 
     const savedMateIds = await savedMateIdsForUser(currentUserId);
-    return toDiscoverMate(profile, {}, savedMateIds);
+    const activeSessionByUserId = await activeSessionStatusesForUsers([targetUserId]);
+    return toDiscoverMate(profile, {}, savedMateIds, activeSessionByUserId);
   }
 
   public static async getInstantMates(
@@ -456,15 +498,20 @@ export class DiscoverService {
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
-
-    return profiles
+    const filteredProfiles = profiles
       .filter(isDiscoverableProfile)
       .filter((profile) => profileMatchesCategory(profile.categories, input.category))
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
-      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
-      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input));
+    const activeSessionByUserId = await activeSessionStatusesForUsers(
+      filteredProfiles.map((profile) => profile.userId),
+    );
+
+    return filteredProfiles.map((profile) =>
+      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    );
   }
 
   public static async listSavedMates(
@@ -491,12 +538,17 @@ export class DiscoverService {
       include: { user: { select: { email: true, phone: true } } },
     });
     const profileByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
-
-    return savedRows
+    const filteredProfiles = savedRows
       .map((row) => profileByUserId.get(row.mateUserId))
       .filter((profile): profile is PublicProfileWithUser => Boolean(profile))
-      .filter(isDiscoverableProfile)
-      .map((profile) => toDiscoverMate(profile, input, savedMateIds));
+      .filter(isDiscoverableProfile);
+    const activeSessionByUserId = await activeSessionStatusesForUsers(
+      filteredProfiles.map((profile) => profile.userId),
+    );
+
+    return filteredProfiles.map((profile) =>
+      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    );
   }
 
   public static async saveMate(currentUserId: string, mateUserId: string): Promise<void> {

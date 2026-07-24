@@ -117,6 +117,8 @@ model Request {
   meetLocation            String        @map("meet_location")
   fromDateTime            DateTime      @map("from_date_time")
   toDateTime              DateTime?     @map("to_date_time")
+  instantBooking          Boolean       @default(false) @map("instant_booking")
+  responseDeadlineAt      DateTime?     @map("response_deadline_at")
   message                 String?       @default("")
   bookingFor              String        @default("self") @map("booking_for")
   beneficiaryName         String?       @map("beneficiary_name")
