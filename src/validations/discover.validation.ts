@@ -30,12 +30,12 @@ export const discoverSearchSchema = z.object({
 
 export const mateProfileParamsSchema = z.object({
   params: z.object({
-    userId: z.string().uuid('Invalid user id'),
+    userId: z.preprocess((val) => Number(val), z.number().int('Invalid user id')),
   }),
 });
 
 export const savedMateParamsSchema = z.object({
   params: z.object({
-    mateUserId: z.string().uuid('Invalid mate user id'),
+    mateUserId: z.preprocess((val) => Number(val), z.number().int('Invalid mate user id')),
   }),
 });

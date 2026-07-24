@@ -36,30 +36,30 @@ describe('SessionService', () => {
   });
 
   const mockRequest = {
-    id: 'req-1',
-    senderId: 'user-sender',
-    receiverId: 'user-receiver',
+    id: 101,
+    senderId: 1,
+    receiverId: 2,
     status: RequestStatus.CONFIRMED,
     otp: '1234',
   };
 
   const mockSenderUser = {
-    id: 'user-sender',
+    id: 1,
     name: 'Sender User',
+    tenureId: 'SNDR123',
     profile: {
       fullName: 'Sender FullName',
-      tenureId: 'SNDR123',
       profilePhoto: 'sender-avatar.jpg',
       hourlyRate: 50,
     },
   };
 
   const mockReceiverUser = {
-    id: 'user-receiver',
+    id: 2,
     name: 'Receiver User',
+    tenureId: 'RCVR123',
     profile: {
       fullName: 'Receiver FullName',
-      tenureId: 'RCVR123',
       profilePhoto: 'receiver-avatar.jpg',
       hourlyRate: 60,
     },
@@ -70,7 +70,7 @@ describe('SessionService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
       await expect(
-        SessionService.startSession('user-sender', 'req-1', '1234')
+        SessionService.startSession(1, 101, '1234')
       ).rejects.toThrow('Meet request not found');
     });
 
@@ -81,7 +81,7 @@ describe('SessionService', () => {
       });
 
       await expect(
-        SessionService.startSession('user-sender', 'req-1', '1234')
+        SessionService.startSession(1, 101, '1234')
       ).rejects.toThrow('Cannot start a session on an unconfirmed request');
     });
 
@@ -89,7 +89,7 @@ describe('SessionService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        SessionService.startSession('unauthorized-user', 'req-1', '1234')
+        SessionService.startSession(999, 101, '1234')
       ).rejects.toThrow('You are not authorized to start a session for this request');
     });
 
@@ -97,17 +97,17 @@ describe('SessionService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
       await expect(
-        SessionService.startSession('user-sender', 'req-1', 'invalid-otp')
+        SessionService.startSession(1, 101, 'invalid-otp')
       ).rejects.toThrow('Invalid verification OTP code');
     });
 
     it('should return existing mapped session if it already exists', async () => {
       const now = new Date();
       const existing = {
-        id: 'sess-1',
-        requestId: 'req-1',
-        senderId: 'user-sender',
-        receiverId: 'user-receiver',
+        id: 201,
+        requestId: 101,
+        senderId: 1,
+        receiverId: 2,
         status: SessionStatus.RUNNING,
         startedAt: now,
         lastTimerStart: now,
@@ -119,18 +119,18 @@ describe('SessionService', () => {
       (prisma.session.findUnique as any).mockResolvedValue(existing);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession('user-sender', 'req-1', '1234');
-      expect(result.id).toBe('sess-1');
+      const result = await SessionService.startSession(1, 101, '1234');
+      expect(result.id).toBe(201);
       expect(result.status).toBe('running');
     });
 
     it('should create and broadcast new session if none exists', async () => {
       const now = new Date();
       const created = {
-        id: 'sess-2',
-        requestId: 'req-1',
-        senderId: 'user-sender',
-        receiverId: 'user-receiver',
+        id: 202,
+        requestId: 101,
+        senderId: 1,
+        receiverId: 2,
         status: SessionStatus.RUNNING,
         startedAt: now,
         lastTimerStart: now,
@@ -143,7 +143,7 @@ describe('SessionService', () => {
       (prisma.session.create as any).mockResolvedValue(created);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession('user-sender', 'req-1', '1234');
+      const result = await SessionService.startSession(1, 101, '1234');
       expect(prisma.session.create).toHaveBeenCalled();
       expect(sendToUser).toHaveBeenCalledTimes(2); // broadcast to sender and receiver
       expect(result.status).toBe('running');
@@ -155,10 +155,10 @@ describe('SessionService', () => {
     const lastTimerStart = new Date(Date.now() - 5000);
 
     const activeSession = {
-      id: 'sess-1',
-      requestId: 'req-1',
-      senderId: 'user-sender',
-      receiverId: 'user-receiver',
+      id: 201,
+      requestId: 101,
+      senderId: 1,
+      receiverId: 2,
       status: SessionStatus.RUNNING,
       startedAt,
       lastTimerStart,
@@ -177,21 +177,21 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.pauseRequest('user-sender', 'req-1');
+      const result = await SessionService.pauseRequest(1, 101);
       expect(result.status).toBe('pause_requested');
-      expect(result.lastActionBy).toBe('user-sender');
+      expect(result.lastActionBy).toBe(1);
     });
 
     it('pauseConfirm should throw error if the same user tries to confirm', async () => {
       const pausedRequestedSession = {
         ...activeSession,
         status: SessionStatus.PAUSE_REQUESTED,
-        lastActionBy: 'user-sender',
+        lastActionBy: 1,
       };
       (prisma.session.findUnique as any).mockResolvedValue(pausedRequestedSession);
 
       await expect(
-        SessionService.pauseConfirm('user-sender', 'req-1')
+        SessionService.pauseConfirm(1, 101)
       ).rejects.toThrow('You cannot confirm your own pause request');
     });
 
@@ -199,7 +199,7 @@ describe('SessionService', () => {
       const pausedRequestedSession = {
         ...activeSession,
         status: SessionStatus.PAUSE_REQUESTED,
-        lastActionBy: 'user-sender',
+        lastActionBy: 1,
       };
       (prisma.session.findUnique as any).mockResolvedValue(pausedRequestedSession);
       (prisma.session.update as any).mockImplementation(({ data }: any) => {
@@ -213,7 +213,7 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockSenderUser);
 
-      const result = await SessionService.pauseConfirm('user-receiver', 'req-1');
+      const result = await SessionService.pauseConfirm(2, 101);
       expect(result.status).toBe('paused');
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(5);
@@ -223,10 +223,10 @@ describe('SessionService', () => {
   describe('resume transitions', () => {
     const startedAt = new Date();
     const pausedSession = {
-      id: 'sess-1',
-      requestId: 'req-1',
-      senderId: 'user-sender',
-      receiverId: 'user-receiver',
+      id: 201,
+      requestId: 101,
+      senderId: 1,
+      receiverId: 2,
       status: SessionStatus.PAUSED,
       startedAt,
       lastTimerStart: null,
@@ -245,21 +245,21 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.resumeRequest('user-sender', 'req-1');
+      const result = await SessionService.resumeRequest(1, 101);
       expect(result.status).toBe('resume_requested');
-      expect(result.lastActionBy).toBe('user-sender');
+      expect(result.lastActionBy).toBe(1);
     });
 
     it('resumeConfirm should throw error if the same user tries to confirm', async () => {
       const resumeRequestedSession = {
         ...pausedSession,
         status: SessionStatus.RESUME_REQUESTED,
-        lastActionBy: 'user-sender',
+        lastActionBy: 1,
       };
       (prisma.session.findUnique as any).mockResolvedValue(resumeRequestedSession);
 
       await expect(
-        SessionService.resumeConfirm('user-sender', 'req-1')
+        SessionService.resumeConfirm(1, 101)
       ).rejects.toThrow('You cannot confirm your own resume request');
     });
 
@@ -267,7 +267,7 @@ describe('SessionService', () => {
       const resumeRequestedSession = {
         ...pausedSession,
         status: SessionStatus.RESUME_REQUESTED,
-        lastActionBy: 'user-sender',
+        lastActionBy: 1,
       };
       (prisma.session.findUnique as any).mockResolvedValue(resumeRequestedSession);
       (prisma.session.update as any).mockImplementation(({ data }: any) => {
@@ -280,7 +280,7 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockSenderUser);
 
-      const result = await SessionService.resumeConfirm('user-receiver', 'req-1');
+      const result = await SessionService.resumeConfirm(2, 101);
       expect(result.status).toBe('running');
       expect(result.lastActionBy).toBeNull();
     });
@@ -291,10 +291,10 @@ describe('SessionService', () => {
     const lastTimerStart = new Date(Date.now() - 3600 * 1000);
 
     const activeSession = {
-      id: 'sess-1',
-      requestId: 'req-1',
-      senderId: 'user-sender',
-      receiverId: 'user-receiver',
+      id: 201,
+      requestId: 101,
+      senderId: 1,
+      receiverId: 2,
       status: SessionStatus.RUNNING,
       startedAt,
       lastTimerStart,
@@ -316,7 +316,7 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser); // receiver is the mate (rate 60)
 
-      const result = await SessionService.endSession('user-sender', 'req-1');
+      const result = await SessionService.endSession(1, 101);
       expect(result.status).toBe('ended');
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(3600);

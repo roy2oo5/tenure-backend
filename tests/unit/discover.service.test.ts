@@ -28,8 +28,7 @@ describe('DiscoverService', () => {
   it('excludes the current user and applies text search', async () => {
     const profiles = [
       {
-        userId: 'other-user',
-        tenureId: 'AB123',
+        userId: 2,
         fullName: 'Jane Doe',
         profilePhoto: 'https://example.com/a.jpg',
         district: 'Bangalore',
@@ -43,10 +42,14 @@ describe('DiscoverService', () => {
         languages: ['English'],
         about: 'Hello',
         aadhaarVerified: true,
+        user: {
+          tenureId: 'AB123',
+          email: 'jane@example.com',
+          phone: '9999999999',
+        },
       },
       {
-        userId: 'current-user',
-        tenureId: 'CD456',
+        userId: 1,
         fullName: 'Me',
         profilePhoto: 'https://example.com/b.jpg',
         district: 'Bangalore',
@@ -58,31 +61,36 @@ describe('DiscoverService', () => {
         languages: ['English'],
         about: null,
         aadhaarVerified: false,
+        user: {
+          tenureId: 'CD456',
+          email: 'me@example.com',
+          phone: '8888888888',
+        },
       },
     ];
 
     (prisma.profile.findMany as any).mockResolvedValue(profiles);
 
-    const results = await DiscoverService.searchMates('current-user', {
+    const results = await DiscoverService.searchMates(1, {
       q: 'jane',
     });
 
     expect(prisma.profile.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          userId: { notIn: ['current-user'] },
+          userId: { notIn: [1] },
         }),
       }),
     );
     expect(results).toHaveLength(1);
     expect(results[0].fullName).toBe('Jane Doe');
+    expect(results[0].tenureId).toBe('AB123');
   });
 
   it('filters mates by category id or label', async () => {
     const profiles = [
       {
-        userId: 'travel-user',
-        tenureId: 'AB123',
+        userId: 3,
         fullName: 'Travel User',
         profilePhoto: 'https://example.com/a.jpg',
         district: 'Bangalore',
@@ -94,10 +102,14 @@ describe('DiscoverService', () => {
         languages: ['English'],
         about: 'Hello',
         aadhaarVerified: true,
+        user: {
+          tenureId: 'AB123',
+          email: 'travel@example.com',
+          phone: '9999999991',
+        },
       },
       {
-        userId: 'food-user',
-        tenureId: 'CD456',
+        userId: 4,
         fullName: 'Food User',
         profilePhoto: 'https://example.com/b.jpg',
         district: 'Bangalore',
@@ -109,18 +121,23 @@ describe('DiscoverService', () => {
         languages: ['English'],
         about: null,
         aadhaarVerified: false,
+        user: {
+          tenureId: 'CD456',
+          email: 'food@example.com',
+          phone: '9999999992',
+        },
       },
     ];
 
     (prisma.profile.findMany as any).mockResolvedValue(profiles);
 
-    const byId = await DiscoverService.searchMates('current-user', {
+    const byId = await DiscoverService.searchMates(1, {
       category: 'travel',
     });
     expect(byId).toHaveLength(1);
     expect(byId[0].fullName).toBe('Travel User');
 
-    const byLabel = await DiscoverService.searchMates('current-user', {
+    const byLabel = await DiscoverService.searchMates(1, {
       category: 'Food Mate',
     });
     expect(byLabel).toHaveLength(1);
@@ -130,8 +147,7 @@ describe('DiscoverService', () => {
   it('lists instant mates while ready now is enabled without requiring an expiry time', async () => {
     const profiles = [
       {
-        userId: 'ready-user',
-        tenureId: 'IN123',
+        userId: 5,
         fullName: 'Ready User',
         profilePhoto: 'https://example.com/ready.jpg',
         district: 'Bangalore',
@@ -156,12 +172,17 @@ describe('DiscoverService', () => {
         instantAvailableUntil: null,
         instantCategories: [],
         instantNote: null,
+        user: {
+          tenureId: 'IN123',
+          email: 'ready@example.com',
+          phone: '9999999993',
+        },
       },
     ];
 
     (prisma.profile.findMany as any).mockResolvedValue(profiles);
 
-    const results = await DiscoverService.getInstantMates('current-user', {});
+    const results = await DiscoverService.getInstantMates(1, {});
 
     expect(prisma.profile.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -178,8 +199,7 @@ describe('DiscoverService', () => {
   it('returns distance from the searching user when coordinates are provided', async () => {
     const profiles = [
       {
-        userId: 'near-user',
-        tenureId: 'NE123',
+        userId: 6,
         fullName: 'Near User',
         profilePhoto: 'https://example.com/near.jpg',
         district: 'Bangalore',
@@ -206,12 +226,17 @@ describe('DiscoverService', () => {
         instantAvailableUntil: null,
         instantCategories: [],
         instantNote: null,
+        user: {
+          tenureId: 'NE123',
+          email: 'near@example.com',
+          phone: '9999999994',
+        },
       },
     ];
 
     (prisma.profile.findMany as any).mockResolvedValue(profiles);
 
-    const results = await DiscoverService.searchMates('current-user', {
+    const results = await DiscoverService.searchMates(1, {
       latitude: 12.9716,
       longitude: 77.5946,
     });
@@ -223,8 +248,7 @@ describe('DiscoverService', () => {
   it('keeps live mates discoverable and marks them busy today', async () => {
     const profiles = [
       {
-        userId: 'live-user',
-        tenureId: 'LV123',
+        userId: 7,
         fullName: 'Live User',
         profilePhoto: 'https://example.com/live.jpg',
         district: 'Bangalore',
@@ -250,19 +274,24 @@ describe('DiscoverService', () => {
         instantAvailableUntil: null,
         instantCategories: [],
         instantNote: null,
+        user: {
+          tenureId: 'LV123',
+          email: 'live@example.com',
+          phone: '9999999995',
+        },
       },
     ];
 
     (prisma.profile.findMany as any).mockResolvedValue(profiles);
     (prisma.session.findMany as any).mockResolvedValue([
       {
-        senderId: 'someone-else',
-        receiverId: 'live-user',
+        senderId: 8,
+        receiverId: 7,
         status: 'RUNNING',
       },
     ]);
 
-    const results = await DiscoverService.searchMates('current-user', {
+    const results = await DiscoverService.searchMates(1, {
       q: 'live',
     });
 

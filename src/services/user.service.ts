@@ -17,7 +17,7 @@ const formatUser = (user: User): UserWithoutPassword => {
   return userWithoutPassword;
 };
 
-const signToken = (id: string, email: string | null, role: Role): string => {
+const signToken = (id: number, email: string | null, role: Role): string => {
   const options: SignOptions = {
     expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
   };
@@ -155,7 +155,7 @@ export class UserService {
     };
   }
 
-  public static async getProfile(id: string): Promise<UserWithoutPassword> {
+  public static async getProfile(id: number): Promise<UserWithoutPassword> {
     const user = await prisma.user.findUnique({
       where: { id },
     });
@@ -174,7 +174,7 @@ export class UserService {
     return users.map(formatUser);
   }
 
-  public static async updateUser(id: string, data: Prisma.UserUpdateInput): Promise<UserWithoutPassword> {
+  public static async updateUser(id: number, data: Prisma.UserUpdateInput): Promise<UserWithoutPassword> {
     if (data.password) {
       data.password = await bcrypt.hash(data.password as string, 12);
     }
@@ -188,7 +188,7 @@ export class UserService {
   }
 
   public static async changePassword(
-    userId: string,
+    userId: number,
     currentPassword?: string,
     newPassword?: string
   ): Promise<void> {
@@ -219,7 +219,7 @@ export class UserService {
     await this.updateUser(userId, { password: newPassword });
   }
 
-  public static async deleteUser(id: string): Promise<void> {
+  public static async deleteUser(id: number): Promise<void> {
     await prisma.user.delete({
       where: { id },
     });

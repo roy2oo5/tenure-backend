@@ -17,7 +17,7 @@ export type DiscoverSearchInput = {
 };
 
 export type DiscoverMateResult = {
-  userId: string;
+  userId: number;
   tenureId: string;
   fullName: string;
   profilePhoto: string | null;
@@ -60,6 +60,7 @@ export type DiscoverMateResult = {
 
 type PublicProfile = Profile & {
   user?: {
+    tenureId: string | null;
     email?: string | null;
     phone?: string | null;
   } | null;
@@ -67,7 +68,8 @@ type PublicProfile = Profile & {
 
 type PublicProfileWithUser = Profile & {
   user: {
-    email: string;
+    tenureId: string | null;
+    email: string | null;
     phone: string | null;
   };
 };
@@ -271,8 +273,8 @@ function displayCategory(profile: Profile, requestedCategory?: string | null): s
 function toDiscoverMate(
   profile: PublicProfile,
   input: DiscoverSearchInput = {},
-  savedMateIds = new Set<string>(),
-  activeSessionByUserId = new Map<string, SessionStatus>(),
+  savedMateIds = new Set<number>(),
+  activeSessionByUserId = new Map<number, SessionStatus>(),
 ): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
   const gallery = profile.gallery ?? [];
@@ -280,7 +282,7 @@ function toDiscoverMate(
   const activeSessionStatus = activeSessionByUserId.get(profile.userId) ?? null;
   return {
     userId: profile.userId,
-    tenureId: profile.tenureId,
+    tenureId: profile.user?.tenureId ?? 'Not assigned',
     fullName: profile.fullName,
     profilePhoto: getProfileAvatar(profile),
     district: profile.district,
@@ -326,7 +328,7 @@ function toDiscoverMate(
   };
 }
 
-async function savedMateIdsForUser(userId: string): Promise<Set<string>> {
+async function savedMateIdsForUser(userId: number): Promise<Set<number>> {
   const rows = await prisma.savedMate.findMany({
     where: { userId },
     select: { mateUserId: true },
@@ -335,8 +337,8 @@ async function savedMateIdsForUser(userId: string): Promise<Set<string>> {
 }
 
 async function activeSessionStatusesForUsers(
-  userIds: string[],
-): Promise<Map<string, SessionStatus>> {
+  userIds: number[],
+): Promise<Map<number, SessionStatus>> {
   if (!userIds.length) {
     return new Map();
   }
@@ -353,7 +355,7 @@ async function activeSessionStatusesForUsers(
     },
   });
 
-  const statuses = new Map<string, SessionStatus>();
+  const statuses = new Map<number, SessionStatus>();
   for (const session of sessions) {
     if (userIds.includes(session.senderId)) {
       statuses.set(session.senderId, session.status);
@@ -367,7 +369,7 @@ async function activeSessionStatusesForUsers(
 
 export class DiscoverService {
   public static async searchMates(
-    currentUserId: string,
+    currentUserId: number,
     input: DiscoverSearchInput,
   ): Promise<DiscoverMateResult[]> {
     const blocks = await prisma.block.findMany({
@@ -400,7 +402,7 @@ export class DiscoverService {
 
     const profiles = await prisma.profile.findMany({
       where,
-      include: { user: { select: { email: true, phone: true } } },
+      include: { user: { select: { tenureId: true, email: true, phone: true } } },
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
@@ -421,8 +423,8 @@ export class DiscoverService {
   }
 
   public static async getMatePublicProfile(
-    currentUserId: string,
-    targetUserId: string,
+    currentUserId: number,
+    targetUserId: number,
   ): Promise<DiscoverMateResult | null> {
     if (currentUserId === targetUserId) {
       return null;
@@ -460,7 +462,7 @@ export class DiscoverService {
   }
 
   public static async getInstantMates(
-    currentUserId: string,
+    currentUserId: number,
     input: DiscoverSearchInput,
   ): Promise<DiscoverMateResult[]> {
     const blocks = await prisma.block.findMany({
@@ -494,7 +496,7 @@ export class DiscoverService {
 
     const profiles = await prisma.profile.findMany({
       where,
-      include: { user: { select: { email: true, phone: true } } },
+      include: { user: { select: { tenureId: true, email: true, phone: true } } },
       orderBy: { updatedAt: 'desc' },
     });
     const savedMateIds = await savedMateIdsForUser(currentUserId);
@@ -515,7 +517,7 @@ export class DiscoverService {
   }
 
   public static async listSavedMates(
-    currentUserId: string,
+    currentUserId: number,
     input: DiscoverSearchInput,
   ): Promise<DiscoverMateResult[]> {
     const savedRows = await prisma.savedMate.findMany({
@@ -535,7 +537,7 @@ export class DiscoverService {
         categories: { isEmpty: false },
         user: { isActive: true },
       },
-      include: { user: { select: { email: true, phone: true } } },
+      include: { user: { select: { tenureId: true, email: true, phone: true } } },
     });
     const profileByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
     const filteredProfiles = savedRows
@@ -551,7 +553,7 @@ export class DiscoverService {
     );
   }
 
-  public static async saveMate(currentUserId: string, mateUserId: string): Promise<void> {
+  public static async saveMate(currentUserId: number, mateUserId: number): Promise<void> {
     if (currentUserId === mateUserId) {
       throw new AppError('You cannot save your own profile.', 400);
     }
@@ -571,7 +573,7 @@ export class DiscoverService {
     });
   }
 
-  public static async unsaveMate(currentUserId: string, mateUserId: string): Promise<void> {
+  public static async unsaveMate(currentUserId: number, mateUserId: number): Promise<void> {
     await prisma.savedMate.deleteMany({
       where: {
         userId: currentUserId,

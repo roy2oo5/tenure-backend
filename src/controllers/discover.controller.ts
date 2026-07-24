@@ -88,7 +88,7 @@ export class DiscoverController {
         return next(new AppError('You are not authenticated.', 401));
       }
 
-      const profile = await DiscoverService.getMatePublicProfile(req.user.id, req.params.userId);
+      const profile = await DiscoverService.getMatePublicProfile(req.user.id, parseInt(req.params.userId, 10));
 
       if (!profile) {
         return next(new AppError('Mate profile not found.', 404));
@@ -130,7 +130,7 @@ export class DiscoverController {
         return next(new AppError('You are not authenticated.', 401));
       }
 
-      await DiscoverService.saveMate(req.user.id, req.params.mateUserId);
+      await DiscoverService.saveMate(req.user.id, parseInt(req.params.mateUserId, 10));
 
       res.status(200).json({
         status: 'success',
@@ -147,7 +147,7 @@ export class DiscoverController {
         return next(new AppError('You are not authenticated.', 401));
       }
 
-      await DiscoverService.unsaveMate(req.user.id, req.params.mateUserId);
+      await DiscoverService.unsaveMate(req.user.id, parseInt(req.params.mateUserId, 10));
 
       res.status(200).json({
         status: 'success',

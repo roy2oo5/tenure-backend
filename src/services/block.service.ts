@@ -5,7 +5,7 @@ export class BlockService {
   /**
    * Block a user
    */
-  public static async blockUser(blockerId: string, blockedId: string) {
+  public static async blockUser(blockerId: number, blockedId: number) {
     if (blockerId === blockedId) {
       throw new AppError('You cannot block yourself', 400);
     }
@@ -42,7 +42,7 @@ export class BlockService {
   /**
    * Unblock a user
    */
-  public static async unblockUser(blockerId: string, blockedId: string) {
+  public static async unblockUser(blockerId: number, blockedId: number) {
     // Check if block exists
     const existingBlock = await prisma.block.findUnique({
       where: {
@@ -65,7 +65,7 @@ export class BlockService {
   /**
    * Get list of blocked users by blockerId
    */
-  public static async getBlockedUsers(blockerId: string) {
+  public static async getBlockedUsers(blockerId: number) {
     const blocks = await prisma.block.findMany({
       where: { blockerId },
       include: {
@@ -75,9 +75,9 @@ export class BlockService {
             name: true,
             email: true,
             phone: true,
+            tenureId: true,
             profile: {
               select: {
-                tenureId: true,
                 fullName: true,
                 profilePhoto: true,
               },
@@ -92,7 +92,7 @@ export class BlockService {
       name: b.blocked.name,
       email: b.blocked.email,
       phone: b.blocked.phone,
-      tenureId: b.blocked.profile?.tenureId || '',
+      tenureId: b.blocked.tenureId || '',
       fullName: b.blocked.profile?.fullName || '',
       profilePhoto: b.blocked.profile?.profilePhoto || null,
     }));
@@ -101,7 +101,7 @@ export class BlockService {
   /**
    * Check if userA blocked userB, or userB blocked userA
    */
-  public static async isBlocked(userAId: string, userBId: string): Promise<boolean> {
+  public static async isBlocked(userAId: number, userBId: number): Promise<boolean> {
     const blockRelation = await prisma.block.findFirst({
       where: {
         OR: [

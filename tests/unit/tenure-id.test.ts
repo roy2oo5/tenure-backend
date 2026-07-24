@@ -13,10 +13,10 @@ describe('generateRawTenureId', () => {
       expect(letters).toHaveLength(2);
       expect(digits).toHaveLength(3);
 
-      // Check that the two letters are adjacent and positioned at either the beginning or the end.
-      // Valid patterns: LLNNN (letters at the beginning) or NNNLL (letters at the end)
-      const isAtEnds = /^[A-Z]{2}[0-9]{3}$|^[0-9]{3}[A-Z]{2}$/.test(id);
-      expect(isAtEnds).toBe(true);
+      // Check that the format is strictly 2 letters followed by 3 digits.
+      // Valid patterns: LLNNN (letters at the beginning)
+      const matchesStrictPattern = /^[A-Z]{2}[0-9]{3}$/.test(id);
+      expect(matchesStrictPattern).toBe(true);
     }
   });
 });

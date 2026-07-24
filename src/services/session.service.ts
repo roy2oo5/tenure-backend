@@ -6,23 +6,23 @@ import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type MappedSession = {
-  id: string;
-  requestId: string;
-  senderId: string;
-  receiverId: string;
+  id: number;
+  requestId: number;
+  senderId: number;
+  receiverId: number;
   status: 'running' | 'pause_requested' | 'paused' | 'resume_requested' | 'ended';
   startedAt: number;
   endedAt: number | null;
   fromDateTime: string;
   toDateTime: string;
   elapsedSec: number;
-  mateUserId: string;
+  mateUserId: number;
   mateName: string;
   mateTenureId: string;
   mateAvatar: string;
   hourlyRate: number;
   billingAmount: number;
-  lastActionBy: string | null;
+  lastActionBy: number | null;
   endReason: string | null;
 };
 
@@ -63,7 +63,7 @@ function hourlyRateForRequest(
   return profile.hourlyRate ?? 50;
 }
 
-async function mapSession(session: any, currentUserId: string): Promise<MappedSession> {
+async function mapSession(session: any, currentUserId: number): Promise<MappedSession> {
   const isSender = session.senderId === currentUserId;
   const partnerId = isSender ? session.receiverId : session.senderId;
 
@@ -129,7 +129,7 @@ async function mapSession(session: any, currentUserId: string): Promise<MappedSe
     elapsedSec,
     mateUserId: partnerId,
     mateName: partner?.profile?.fullName ?? partner?.name ?? 'Anonymous',
-    mateTenureId: partner?.profile?.tenureId ?? 'Not assigned',
+    mateTenureId: partner?.tenureId ?? 'Not assigned',
     mateAvatar: partner?.profile?.profilePhoto ?? '',
     hourlyRate,
     billingAmount,
@@ -144,7 +144,7 @@ function broadcastSessionUpdate(session: any, mappedForSender: MappedSession, ma
 }
 
 export class SessionService {
-  public static async startSession(userId: string, requestId: string, _otp: string): Promise<MappedSession> {
+  public static async startSession(userId: number, requestId: number, _otp: string): Promise<MappedSession> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
     });
@@ -191,7 +191,7 @@ export class SessionService {
     return mapSession(session, userId);
   }
 
-  public static async pauseRequest(userId: string, requestId: string): Promise<MappedSession> {
+  public static async pauseRequest(userId: number, requestId: number): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -223,7 +223,7 @@ export class SessionService {
     return mapSession(updated, userId);
   }
 
-  public static async pauseConfirm(userId: string, requestId: string): Promise<MappedSession> {
+  public static async pauseConfirm(userId: number, requestId: number): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -268,7 +268,7 @@ export class SessionService {
     return mapSession(updated, userId);
   }
 
-  public static async resumeRequest(userId: string, requestId: string): Promise<MappedSession> {
+  public static async resumeRequest(userId: number, requestId: number): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -300,7 +300,7 @@ export class SessionService {
     return mapSession(updated, userId);
   }
 
-  public static async resumeConfirm(userId: string, requestId: string): Promise<MappedSession> {
+  public static async resumeConfirm(userId: number, requestId: number): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -338,8 +338,8 @@ export class SessionService {
   }
 
   public static async endSession(
-    userId: string,
-    requestId: string,
+    userId: number,
+    requestId: number,
     endReason?: string | null,
   ): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
@@ -408,7 +408,7 @@ export class SessionService {
     return mapSession(updated, userId);
   }
 
-  public static async getSession(userId: string, requestId: string): Promise<MappedSession> {
+  public static async getSession(userId: number, requestId: number): Promise<MappedSession> {
     const session = await prisma.session.findUnique({
       where: { requestId },
     });
@@ -424,7 +424,7 @@ export class SessionService {
     return mapSession(session, userId);
   }
 
-  public static async getActiveSession(userId: string): Promise<MappedSession | null> {
+  public static async getActiveSession(userId: number): Promise<MappedSession | null> {
     const session = await prisma.session.findFirst({
       where: {
         OR: [{ senderId: userId }, { receiverId: userId }],

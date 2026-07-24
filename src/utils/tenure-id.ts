@@ -19,24 +19,8 @@ export function generateRawTenureId(): string {
   const d2 = digits[Math.floor(Math.random() * digits.length)];
   const d3 = digits[Math.floor(Math.random() * digits.length)];
 
-  // 3. Randomly choose starting index for the 2 consecutive letters (0 or 3)
-  // 0 places the letters at the beginning, 3 places them at the end.
-  const letterPos = Math.random() < 0.5 ? 0 : 3;
-
-  // 4. Construct the 5-character string
-  let result = '';
-  let digitIdx = 0;
-  const digitsArr = [d1, d2, d3];
-
-  for (let i = 0; i < 4; i++) {
-    if (i === letterPos) {
-      result += pair;
-    } else {
-      result += digitsArr[digitIdx++];
-    }
-  }
-
-  return result;
+  // 3. Construct 5-character string: First 2 letters and 3 digits followed
+  return pair + d1 + d2 + d3;
 }
 
 /**
@@ -48,7 +32,7 @@ export async function generateUniqueTenureId(): Promise<string> {
 
   while (!isUnique) {
     tenureId = generateRawTenureId();
-    const existing = await prisma.profile.findUnique({
+    const existing = await prisma.user.findUnique({
       where: { tenureId },
     });
     if (!existing) {

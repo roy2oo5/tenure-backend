@@ -94,7 +94,7 @@ export class UserController {
 
   public static async deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       await UserService.deleteUser(id);
       res.status(204).json({
         status: 'success',

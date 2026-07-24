@@ -13,7 +13,8 @@ enum Role {
 }
 
 model User {
-  id               String         @id @default(uuid())
+  id               Int            @id @default(autoincrement())
+  tenureId         String?        @unique @map("tenure_id")
   email            String?        @unique
   phone            String?        @unique @map("phone")
   password         String?
@@ -39,9 +40,8 @@ model User {
 }
 
 model Profile {
-  id                     String    @id @default(uuid())
-  userId                 String    @unique @map("user_id")
-  tenureId               String    @unique @map("tenure_id")
+  id                     Int       @id @default(autoincrement())
+  userId                 Int       @unique @map("user_id")
   user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   profilePhoto           String?   @map("profile_photo")
   fullName               String    @map("full_name")
@@ -107,9 +107,9 @@ enum RequestStatus {
 }
 
 model Request {
-  id                      String        @id @default(uuid())
-  senderId                String        @map("sender_id")
-  receiverId              String        @map("receiver_id")
+  id                      Int           @id @default(autoincrement())
+  senderId                Int           @map("sender_id")
+  receiverId              Int           @map("receiver_id")
   sender                  User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
   receiver                User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
   categoryId              String        @map("category_id")
@@ -134,7 +134,7 @@ model Request {
   session                 Session?
   otp                     String?       @map("otp")
   cancelledAt             DateTime?     @map("cancelled_at")
-  cancelledById           String?       @map("cancelled_by_id")
+  cancelledById           Int?          @map("cancelled_by_id")
   cancellationFee         Float         @default(0) @map("cancellation_fee")
   cancellationFeeReason   String?       @map("cancellation_fee_reason")
   createdAt               DateTime      @default(now()) @map("created_at")
@@ -144,10 +144,10 @@ model Request {
 }
 
 model Message {
-  id            String   @id @default(uuid())
-  requestId     String   @map("request_id")
-  senderId      String   @map("sender_id")
-  receiverId    String   @map("receiver_id")
+  id            Int      @id @default(autoincrement())
+  requestId     Int      @map("request_id")
+  senderId      Int      @map("sender_id")
+  receiverId    Int      @map("receiver_id")
   content       String
   type          String   @default("text") // 'text', 'image', 'voice'
   mediaUrl      String?  @map("media_url")
@@ -170,16 +170,16 @@ enum SessionStatus {
 }
 
 model Session {
-  id                  String        @id @default(uuid())
-  requestId           String        @unique @map("request_id")
-  senderId            String        @map("sender_id")
-  receiverId          String        @map("receiver_id")
+  id                  Int           @id @default(autoincrement())
+  requestId           Int           @unique @map("request_id")
+  senderId            Int           @map("sender_id")
+  receiverId          Int           @map("receiver_id")
   status              SessionStatus @default(RUNNING)
   startedAt           DateTime      @default(now()) @map("started_at")
   endedAt             DateTime?     @map("ended_at")
   totalElapsedSeconds Int           @default(0) @map("total_elapsed_seconds")
   lastTimerStart      DateTime?     @map("last_timer_start")
-  lastActionBy        String?       @map("last_action_by")
+  lastActionBy        Int?          @map("last_action_by")
   endReason           String?       @map("end_reason")
 
   request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -188,8 +188,8 @@ model Session {
 }
 
 model Notification {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind      String   @map("kind")
   message   String   @map("message")
@@ -200,9 +200,9 @@ model Notification {
 }
 
 model SavedMate {
-  id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  mateUserId String   @map("mate_user_id")
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  mateUserId Int      @map("mate_user_id")
   user       User     @relation("SavedByUser", fields: [userId], references: [id], onDelete: Cascade)
   mate       User     @relation("SavedMateUser", fields: [mateUserId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now()) @map("created_at")
@@ -213,9 +213,9 @@ model SavedMate {
 }
 
 model Block {
-  id        String   @id @default(uuid())
-  blockerId String   @map("blocker_id")
-  blockedId String   @map("blocked_id")
+  id        Int      @id @default(autoincrement())
+  blockerId Int      @map("blocker_id")
+  blockedId Int      @map("blocked_id")
   createdAt DateTime @default(now()) @map("created_at")
 
   blocker User @relation("UserBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
@@ -226,9 +226,9 @@ model Block {
 }
 
 model Report {
-  id         String   @id @default(uuid())
-  reporterId String   @map("reporter_id")
-  targetId   String?  @map("target_id")
+  id         Int      @id @default(autoincrement())
+  reporterId Int      @map("reporter_id")
+  targetId   Int?     @map("target_id")
   category   String
   message    String
   createdAt  DateTime @default(now()) @map("created_at")

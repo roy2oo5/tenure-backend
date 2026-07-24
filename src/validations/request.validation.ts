@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createRequestSchema = z.object({
   body: z
     .object({
-      receiverId: z.string().uuid('Invalid mate user ID format'),
+      receiverId: z.number().int('Invalid mate user ID format'),
       categoryId: z.string().min(1, 'Category ID is required'),
       categoryLabel: z.string().min(1, 'Category label is required'),
       meetLocation: z.string().min(1, 'Meeting location is required'),

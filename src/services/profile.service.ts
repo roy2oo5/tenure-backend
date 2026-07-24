@@ -111,11 +111,22 @@ export class ProfileService {
   /**
    * Upsert a user profile (create if not exists, update if exists)
    */
-  public static async upsertProfile(userId: string, data: ProfileUpsertInput): Promise<Profile> {
+  public static async upsertProfile(userId: number, data: ProfileUpsertInput): Promise<Profile> {
+    const userRecord = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { tenureId: true },
+    });
+    if (userRecord && !userRecord.tenureId) {
+      const generated = await generateUniqueTenureId();
+      await prisma.user.update({
+        where: { id: userId },
+        data: { tenureId: generated },
+      });
+    }
+
     const existingProfile = await prisma.profile.findUnique({
       where: { userId },
       select: {
-        tenureId: true,
         aadhaarVerified: true,
         aadhaarMasked: true,
         instantAvailable: true,
@@ -225,14 +236,11 @@ export class ProfileService {
       emergencyRelation,
     };
 
-    const tenureId = existingProfile?.tenureId || (await generateUniqueTenureId());
-
     return prisma.profile.upsert({
       where: { userId },
       update: formattedData,
       create: {
         userId,
-        tenureId,
         ...formattedData,
       },
     });
@@ -241,14 +249,14 @@ export class ProfileService {
   /**
    * Get a user profile by user ID
    */
-  public static async getProfile(userId: string): Promise<Profile | null> {
+  public static async getProfile(userId: number): Promise<Profile | null> {
     return prisma.profile.findUnique({
       where: { userId },
     });
   }
 
   public static async verifyAadhaar(
-    userId: string,
+    userId: number,
     data: { aadhaarNumber: string; fullName: string; dob: string },
   ): Promise<{ profile: Profile | null; matchType: string; message: string }> {
     const apiKey = diditApiKey();
@@ -312,14 +320,12 @@ export class ProfileService {
   /**
    * Update profile photo for a user
    */
-  public static async updateProfilePhoto(userId: string, photoUrl: string): Promise<Profile> {
+  public static async updateProfilePhoto(userId: number, photoUrl: string): Promise<Profile> {
     const existingProfile = await prisma.profile.findUnique({ where: { userId } });
     if (!existingProfile) {
-      const tenureId = await generateUniqueTenureId();
       return prisma.profile.create({
         data: {
           userId,
-          tenureId,
           fullName: 'User',
           country: '',
           state: '',
@@ -340,14 +346,12 @@ export class ProfileService {
   /**
    * Add a photo to the user's gallery
    */
-  public static async addGalleryPhoto(userId: string, photoUrl: string): Promise<Profile> {
+  public static async addGalleryPhoto(userId: number, photoUrl: string): Promise<Profile> {
     const existingProfile = await prisma.profile.findUnique({ where: { userId } });
     if (!existingProfile) {
-      const tenureId = await generateUniqueTenureId();
       return prisma.profile.create({
         data: {
           userId,
-          tenureId,
           fullName: 'User',
           country: '',
           state: '',
@@ -373,7 +377,7 @@ export class ProfileService {
    * Update coordinates for a user profile
    */
   public static async updateLocation(
-    userId: string,
+    userId: number,
     location: { latitude: number; longitude: number },
   ): Promise<Profile> {
     const profile = await prisma.profile.findUnique({ where: { userId } });

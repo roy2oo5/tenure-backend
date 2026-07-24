@@ -7,7 +7,7 @@ export class NotificationService {
    * Create a new notification for a specific user
    */
   public static async createNotification(
-    userId: string,
+    userId: number,
     kind: string,
     message: string
   ): Promise<Notification> {
@@ -24,7 +24,7 @@ export class NotificationService {
    * List all notifications for a user, with optional category filtering
    */
   public static async listNotifications(
-    userId: string,
+    userId: number,
     filter?: string
   ): Promise<Notification[]> {
     const whereClause: any = { userId };
@@ -47,8 +47,8 @@ export class NotificationService {
    * Mark a specific notification as read
    */
   public static async markAsRead(
-    userId: string,
-    notificationId: string
+    userId: number,
+    notificationId: number
   ): Promise<Notification> {
     const notification = await prisma.notification.findUnique({
       where: { id: notificationId },
@@ -71,7 +71,7 @@ export class NotificationService {
   /**
    * Mark all notifications for a user as read
    */
-  public static async markAllAsRead(userId: string): Promise<any> {
+  public static async markAllAsRead(userId: number): Promise<any> {
     return prisma.notification.updateMany({
       where: {
         userId,

@@ -7,7 +7,7 @@ import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 
 // Store active connections: map of userId -> WebSocket
-const connections = new Map<string, WebSocket>();
+const connections = new Map<number, WebSocket>();
 
 export function initWebSocket(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
@@ -29,11 +29,18 @@ export function initWebSocket(server: HttpServer) {
     try {
       const parsedUrl = url.parse(request.url || '', true);
       const token = parsedUrl.query.token as string;
-      const requestId = parsedUrl.query.requestId as string;
+      const reqIdStr = parsedUrl.query.requestId as string;
 
-      if (!token || !requestId) {
+      if (!token || !reqIdStr) {
         ws.send(JSON.stringify({ error: 'Missing token or requestId' }));
         ws.close(4001, 'Unauthorized');
+        return;
+      }
+
+      const requestId = parseInt(reqIdStr, 10);
+      if (isNaN(requestId)) {
+        ws.send(JSON.stringify({ error: 'Invalid requestId format' }));
+        ws.close(4000, 'Bad Request');
         return;
       }
 
@@ -178,7 +185,7 @@ export function initWebSocket(server: HttpServer) {
   });
 }
 
-export function sendToUser(userId: string, data: any): boolean {
+export function sendToUser(userId: number, data: any): boolean {
   const ws = connections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));

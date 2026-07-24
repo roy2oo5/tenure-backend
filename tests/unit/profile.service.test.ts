@@ -8,6 +8,10 @@ vi.mock('@/config/database', () => ({
       upsert: vi.fn(),
       findUnique: vi.fn(),
     },
+    user: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 
@@ -59,7 +63,7 @@ describe('ProfileService', () => {
   });
 
   describe('upsertProfile', () => {
-    it('should generate a new tenureId if profile does not exist', async () => {
+    it('should upsert profile successfully', async () => {
       const mockProfileData = {
         profilePhoto: 'https://example.com/photo.jpg',
         fullName: 'Jane Doe',
@@ -75,23 +79,31 @@ describe('ProfileService', () => {
       };
 
       const mockResponse = {
-        id: 'profile-id-123',
-        userId: 'user-id-123',
-        tenureId: 'AB123',
+        id: 2001,
+        userId: 123,
         ...mockProfileData,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
 
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: null });
+      (prisma.user.update as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
       (prisma.profile.findUnique as any).mockResolvedValue(null);
       (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
 
-      const result = await ProfileService.upsertProfile('user-id-123', mockProfileData);
+      const result = await ProfileService.upsertProfile(123, mockProfileData);
 
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: 123 },
+        select: { tenureId: true },
+      });
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 123 },
+        data: { tenureId: 'AB123' },
+      });
       expect(prisma.profile.findUnique).toHaveBeenCalledWith({
-        where: { userId: 'user-id-123' },
+        where: { userId: 123 },
         select: {
-          tenureId: true,
           aadhaarVerified: true,
           aadhaarMasked: true,
           instantAvailable: true,
@@ -108,7 +120,7 @@ describe('ProfileService', () => {
         },
       });
       expect(prisma.profile.upsert).toHaveBeenCalledWith({
-        where: { userId: 'user-id-123' },
+        where: { userId: 123 },
         update: {
           ...mockProfileData,
           categories: ['Travel Mate'],
@@ -116,79 +128,11 @@ describe('ProfileService', () => {
           ...extendedProfileDefaults,
         },
         create: {
-          userId: 'user-id-123',
-          tenureId: 'AB123',
+          userId: 123,
           ...mockProfileData,
           categories: ['Travel Mate'],
           hourlyRate: 25.0,
           ...extendedProfileDefaults,
-        },
-      });
-      expect(result).toEqual(mockResponse);
-    });
-
-    it('should reuse the existing tenureId if profile already exists', async () => {
-      const mockProfileData = {
-        profilePhoto: 'https://example.com/photo.jpg',
-        fullName: 'Jane Doe',
-        dob: new Date('1995-12-15'),
-        gender: 'female',
-        country: 'India',
-        state: 'Karnataka',
-        district: 'Bangalore',
-        pinCode: '560001',
-        languages: ['English'],
-        categories: null,
-        hourlyRate: null,
-      };
-
-      const expectedFormattedData = {
-        ...mockProfileData,
-        categories: [],
-        hourlyRate: null,
-        ...extendedProfileDefaults,
-      };
-
-      const mockResponse = {
-        id: 'profile-id-123',
-        userId: 'user-id-123',
-        tenureId: 'XY789',
-        ...expectedFormattedData,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      (prisma.profile.findUnique as any).mockResolvedValue({ tenureId: 'XY789' });
-      (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
-
-      const result = await ProfileService.upsertProfile('user-id-123', mockProfileData);
-
-      expect(prisma.profile.findUnique).toHaveBeenCalledWith({
-        where: { userId: 'user-id-123' },
-        select: {
-          tenureId: true,
-          aadhaarVerified: true,
-          aadhaarMasked: true,
-          instantAvailable: true,
-          instantAvailableUntil: true,
-          instantCategories: true,
-          instantNote: true,
-          profileVisibility: true,
-          notifyRequests: true,
-          notifyChat: true,
-          notifyReminders: true,
-          emergencyName: true,
-          emergencyPhone: true,
-          emergencyRelation: true,
-        },
-      });
-      expect(prisma.profile.upsert).toHaveBeenCalledWith({
-        where: { userId: 'user-id-123' },
-        update: expectedFormattedData,
-        create: {
-          userId: 'user-id-123',
-          tenureId: 'XY789',
-          ...expectedFormattedData,
         },
       });
       expect(result).toEqual(mockResponse);
@@ -220,20 +164,21 @@ describe('ProfileService', () => {
         'Shopping support': 200,
       };
       const mockResponse = {
-        id: 'profile-id-123',
-        userId: 'user-id-123',
-        tenureId: 'AB123',
+        id: 2001,
+        userId: 123,
         ...mockProfileData,
         categoryRates: expectedCategoryRates,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
 
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
       (prisma.profile.findUnique as any).mockResolvedValue(null);
       (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
 
-      await ProfileService.upsertProfile('user-id-123', mockProfileData);
+      await ProfileService.upsertProfile(123, mockProfileData);
 
+      expect(prisma.user.update).not.toHaveBeenCalled();
       expect(prisma.profile.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           update: expect.objectContaining({
@@ -252,9 +197,8 @@ describe('ProfileService', () => {
   describe('getProfile', () => {
     it('should call prisma.profile.findUnique with correct arguments', async () => {
       const mockResponse = {
-        id: 'profile-id-123',
-        userId: 'user-id-123',
-        tenureId: 'XY789',
+        id: 2001,
+        userId: 123,
         fullName: 'Jane Doe',
         dob: new Date('1995-12-15'),
         gender: 'female',
@@ -271,10 +215,10 @@ describe('ProfileService', () => {
 
       (prisma.profile.findUnique as any).mockResolvedValue(mockResponse);
 
-      const result = await ProfileService.getProfile('user-id-123');
+      const result = await ProfileService.getProfile(123);
 
       expect(prisma.profile.findUnique).toHaveBeenCalledWith({
-        where: { userId: 'user-id-123' },
+        where: { userId: 123 },
       });
       expect(result).toEqual(mockResponse);
     });

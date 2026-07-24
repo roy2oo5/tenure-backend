@@ -6,7 +6,7 @@ import { prisma } from '../config/database';
 import { Role } from '@prisma/client';
 
 interface DecodedToken {
-  id: string;
+  id: number;
   email?: string | null;
   role: Role;
   iat: number;

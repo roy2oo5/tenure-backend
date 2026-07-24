@@ -2,7 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 
 export interface CreateReportInput {
-  targetId?: string | null;
+  targetId?: number | null;
   category: string;
   message: string;
 }
@@ -11,7 +11,7 @@ export class ReportService {
   /**
    * Create a support/abuse report
    */
-  public static async createReport(reporterId: string, data: CreateReportInput) {
+  public static async createReport(reporterId: number, data: CreateReportInput) {
     const { targetId, category, message } = data;
 
     if (!category || !category.trim()) {

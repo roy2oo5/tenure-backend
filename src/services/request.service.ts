@@ -6,7 +6,7 @@ import { sendToUser } from './websocket.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type CreateRequestInput = {
-  receiverId: string;
+  receiverId: number;
   categoryId: string;
   categoryLabel: string;
   meetLocation: string;
@@ -36,9 +36,9 @@ export type FrontendRequestStatus =
   | 'ended';
 
 export type MappedRequest = {
-  id: string;
+  id: number;
   direction: 'sent' | 'received';
-  mateUserId: string;
+  mateUserId: number;
   mateName: string;
   mateTenureId: string;
   mateAvatar: string;
@@ -68,7 +68,7 @@ export type MappedRequest = {
   cancellationFee: number;
   cancellationFeeReason?: string | null;
   cancelledAt?: string | null;
-  cancelledById?: string | null;
+  cancelledById?: number | null;
   cancellationFeeApplies: boolean;
   cancellationFeePreview: number;
 };
@@ -227,7 +227,7 @@ const cancellationFields = (request: {
   cancellationFee: number;
   cancellationFeeReason?: string | null;
   cancelledAt?: Date | null;
-  cancelledById?: string | null;
+  cancelledById?: number | null;
 }) => ({
   cancellationFee: request.cancellationFee,
   cancellationFeeReason: request.cancellationFeeReason ?? null,
@@ -364,7 +364,7 @@ const requestFitsAvailability = (
 export class RequestService {
   private static async persistExpiredRequests(
     requests: Array<{
-      id: string;
+      id: number;
       status: RequestStatus;
       toDateTime?: Date | null;
       responseDeadlineAt?: Date | null;
@@ -387,7 +387,7 @@ export class RequestService {
   }
 
   public static async createRequest(
-    senderId: string,
+    senderId: number,
     data: CreateRequestInput,
   ): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
@@ -486,7 +486,7 @@ export class RequestService {
       direction: 'sent',
       mateUserId: receiver.id,
       mateName: receiver.profile?.fullName ?? receiver.name ?? 'Anonymous',
-      mateTenureId: receiver.profile?.tenureId ?? 'Not assigned',
+      mateTenureId: receiver.tenureId ?? 'Not assigned',
       mateAvatar: getProfileAvatar(receiver.profile),
       categoryId: newRequest.categoryId,
       categoryLabel: newRequest.categoryLabel,
@@ -510,7 +510,7 @@ export class RequestService {
   }
 
   public static async listUserRequests(
-    userId: string,
+    userId: number,
   ): Promise<{ sent: MappedRequest[]; received: MappedRequest[] }> {
     const [sentRequests, receivedRequests] = await Promise.all([
       prisma.request.findMany({
@@ -546,7 +546,7 @@ export class RequestService {
         direction: 'sent',
         mateUserId: req.receiver.id,
         mateName: req.receiver.profile?.fullName ?? req.receiver.name ?? 'Anonymous',
-        mateTenureId: req.receiver.profile?.tenureId ?? 'Not assigned',
+        mateTenureId: req.receiver.tenureId ?? 'Not assigned',
         mateAvatar: getProfileAvatar(req.receiver.profile),
         categoryId: req.categoryId,
         categoryLabel: req.categoryLabel,
@@ -580,7 +580,7 @@ export class RequestService {
         direction: 'received',
         mateUserId: req.sender.id,
         mateName: req.sender.profile?.fullName ?? req.sender.name ?? 'Anonymous',
-        mateTenureId: req.sender.profile?.tenureId ?? 'Not assigned',
+        mateTenureId: req.sender.tenureId ?? 'Not assigned',
         mateAvatar: getProfileAvatar(req.sender.profile),
         categoryId: req.categoryId,
         categoryLabel: req.categoryLabel,
@@ -612,8 +612,8 @@ export class RequestService {
   }
 
   public static async updateRequestStatus(
-    userId: string,
-    requestId: string,
+    userId: number,
+    requestId: number,
     status: 'confirmed' | 'declined' | 'cancelled',
     cancellationReason?: string | null,
   ): Promise<MappedRequest> {
@@ -782,7 +782,7 @@ export class RequestService {
       direction: isSender ? 'sent' : 'received',
       mateUserId: partner.id,
       mateName: partner.profile?.fullName ?? partner.name ?? 'Anonymous',
-      mateTenureId: partner.profile?.tenureId ?? 'Not assigned',
+      mateTenureId: partner.tenureId ?? 'Not assigned',
       mateAvatar: getProfileAvatar(partner.profile),
       categoryId: updatedRequest.categoryId,
       categoryLabel: updatedRequest.categoryLabel,
@@ -805,7 +805,7 @@ export class RequestService {
     };
   }
 
-  public static async getRequestMessages(userId: string, requestId: string) {
+  public static async getRequestMessages(userId: number, requestId: number) {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
     });
@@ -836,9 +836,9 @@ export class RequestService {
   }
 
   public static async deleteRequestMessage(
-    userId: string,
-    requestId: string,
-    messageId: string,
+    userId: number,
+    requestId: number,
+    messageId: number,
   ): Promise<void> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },

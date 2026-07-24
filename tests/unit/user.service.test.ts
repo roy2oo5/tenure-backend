@@ -14,6 +14,10 @@ vi.mock('@/config/database', () => ({
   },
 }));
 
+vi.mock('@/utils/tenure-id', () => ({
+  generateUniqueTenureId: vi.fn().mockResolvedValue('AB123'),
+}));
+
 vi.mock('bcryptjs', () => ({
   default: {
     hash: vi.fn().mockResolvedValue('hashedPassword123'),
@@ -41,7 +45,8 @@ describe('UserService', () => {
       };
 
       const mockDbUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: null,
         email: 'test@example.com',
         phone: null,
         password: 'hashedPassword123',
@@ -72,7 +77,8 @@ describe('UserService', () => {
       };
 
       const existingUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: 'AB123',
         email: 'test@example.com',
       };
 
@@ -85,7 +91,8 @@ describe('UserService', () => {
   describe('authenticateByPhone', () => {
     it('should return token for an existing user matched by phone', async () => {
       const existingUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: 'AB123',
         email: 'phone_9876543210@tenure.app',
         phone: '9876543210',
         password: 'hashedPassword123',
@@ -107,7 +114,8 @@ describe('UserService', () => {
 
     it('should create a new user when phone is not registered', async () => {
       const newUser = {
-        id: 'user-uuid-456',
+        id: 456,
+        tenureId: null,
         email: 'phone_9876543210@tenure.app',
         phone: '9876543210',
         password: 'hashedPassword123',
@@ -129,7 +137,8 @@ describe('UserService', () => {
 
     it('should reactivate a deactivated user account by setting isActive to true', async () => {
       const deactivatedUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: 'AB123',
         email: 'phone_9876543210@tenure.app',
         phone: '9876543210',
         password: 'hashedPassword123',
@@ -159,7 +168,8 @@ describe('UserService', () => {
   describe('login', () => {
     it('should login an active user successfully', async () => {
       const activeUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: 'AB123',
         email: 'test@example.com',
         password: 'hashedPassword123',
         role: Role.USER,
@@ -179,7 +189,8 @@ describe('UserService', () => {
 
     it('should reactivate a deactivated user on login', async () => {
       const deactivatedUser = {
-        id: 'user-uuid-123',
+        id: 123,
+        tenureId: 'AB123',
         email: 'test@example.com',
         password: 'hashedPassword123',
         role: Role.USER,
@@ -207,10 +218,10 @@ describe('UserService', () => {
     it('should permanently delete user account', async () => {
       (prisma.user.delete as any).mockResolvedValue({});
 
-      await UserService.deleteUser('user-uuid-123');
+      await UserService.deleteUser(123);
 
       expect(prisma.user.delete).toHaveBeenCalledWith({
-        where: { id: 'user-uuid-123' },
+        where: { id: 123 },
       });
     });
   });

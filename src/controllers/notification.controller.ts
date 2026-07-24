@@ -36,7 +36,7 @@ export class NotificationController {
         return next(new AppError('You are not authenticated', 401));
       }
 
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const notification = await NotificationService.markAsRead(req.user.id, id);
 
       res.status(200).json({

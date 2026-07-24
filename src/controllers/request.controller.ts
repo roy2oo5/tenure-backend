@@ -38,7 +38,7 @@ export class RequestController {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
       }
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { status, cancellationReason } = req.body;
       const request = await RequestService.updateRequestStatus(
         req.user.id,
@@ -60,7 +60,7 @@ export class RequestController {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
       }
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const messages = await RequestService.getRequestMessages(req.user.id, id);
       res.status(200).json({
         status: 'success',
@@ -80,7 +80,8 @@ export class RequestController {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
       }
-      const { id, messageId } = req.params;
+      const id = parseInt(req.params.id, 10);
+      const messageId = parseInt(req.params.messageId, 10);
       await RequestService.deleteRequestMessage(req.user.id, id, messageId);
       res.status(200).json({
         status: 'success',
