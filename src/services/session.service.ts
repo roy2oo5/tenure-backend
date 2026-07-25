@@ -1,7 +1,7 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
-import { sendToUser } from './websocket.service';
+import { sendToUser, sendGlobalToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 
@@ -141,6 +141,8 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
 function broadcastSessionUpdate(session: any, mappedForSender: MappedSession, mappedForReceiver: MappedSession) {
   sendToUser(session.senderId, { event: 'session_update', session: mappedForSender });
   sendToUser(session.receiverId, { event: 'session_update', session: mappedForReceiver });
+  sendGlobalToUser(session.senderId, { event: 'session_updated' });
+  sendGlobalToUser(session.receiverId, { event: 'session_updated' });
 }
 
 export class SessionService {
