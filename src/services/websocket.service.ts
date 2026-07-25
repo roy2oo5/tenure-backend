@@ -161,6 +161,7 @@ export function initWebSocket(server: HttpServer) {
                 userId,
                 latitude: Number(data.latitude),
                 longitude: Number(data.longitude),
+                heading: data.heading != null ? Number(data.heading) : null,
               }));
             }
             return;
