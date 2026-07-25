@@ -495,10 +495,11 @@ export class RequestService {
     }
 
     const responseDeadlineAt = instantBooking
-      ? (data.responseDeadlineAt ?? new Date(Date.now() + 10 * 60 * 1000))
+      ? (data.responseDeadlineAt ?? new Date(new Date(data.fromDateTime).getTime() + 10 * 60 * 1000))
       : null;
     if (responseDeadlineAt) {
-      const responseMinutes = Math.round((responseDeadlineAt.getTime() - Date.now()) / (60 * 1000));
+      const baseTime = data.fromDateTime ? new Date(data.fromDateTime).getTime() : Date.now();
+      const responseMinutes = Math.round((new Date(responseDeadlineAt).getTime() - baseTime) / (60 * 1000));
       if (
         responseMinutes <= 0 ||
         !INSTANT_RESPONSE_WINDOWS_MINUTES.some(
