@@ -33,6 +33,8 @@ model User {
   blocksReceived   Block[]        @relation("UserBlockedBy")
   reportsSent      Report[]       @relation("ReportedBy")
   reportsReceived  Report[]       @relation("ReportedUser")
+  callsSent        Call[]         @relation("CallsSent")
+  callsReceived    Call[]         @relation("CallsReceived")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 
@@ -248,3 +250,28 @@ model Category {
 
   @@map("categories")
 }
+
+enum CallStatus {
+  RINGING
+  ONGOING
+  COMPLETED
+  REJECTED
+  MISSED
+}
+
+model Call {
+  id         Int        @id @default(autoincrement())
+  callerId   Int        @map("caller_id")
+  receiverId Int        @map("receiver_id")
+  status     CallStatus @default(RINGING)
+  startedAt  DateTime?  @map("started_at")
+  endedAt    DateTime?  @map("ended_at")
+  duration   Int?       @default(0)
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  caller   User @relation("CallsSent", fields: [callerId], references: [id], onDelete: Cascade)
+  receiver User @relation("CallsReceived", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@map("calls")
+}
+

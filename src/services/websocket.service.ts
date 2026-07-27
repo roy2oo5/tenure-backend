@@ -71,13 +71,138 @@ export function initWebSocket(server: HttpServer) {
         globalConnections.get(userId)!.add(ws);
         logger.info(`WebSocket global client connected: user=${userId}`);
 
-        ws.on('message', (messageData: string) => {
+        ws.on('message', async (messageData: string) => {
           try {
             const data = JSON.parse(messageData);
-            if (data && data.type === 'ping') {
+            if (!data) return;
+
+            if (data.type === 'ping') {
               ws.send(JSON.stringify({ type: 'pong' }));
+              return;
             }
-          } catch (e) {}
+
+            // WebRTC Call signaling
+            if (data.type === 'call_initiate') {
+              const { receiverId, requestId } = data;
+              
+              // Fetch caller profile details
+              const callerProfile = await prisma.profile.findUnique({
+                where: { userId },
+              });
+
+              // Create call record as RINGING
+              const call = await prisma.call.create({
+                data: {
+                  callerId: userId,
+                  receiverId,
+                  status: 'RINGING',
+                },
+              });
+
+              // Try sending incoming call event to receiver
+              const incomingPayload = {
+                event: 'incoming_call',
+                callId: call.id,
+                callerId: userId,
+                callerName: callerProfile?.fullName || 'User ' + userId,
+                callerAvatar: callerProfile?.profilePhoto || null,
+                requestId,
+              };
+
+              const sent = sendGlobalToUser(receiverId, incomingPayload);
+              if (!sent) {
+                // If receiver is offline, mark call as MISSED
+                await prisma.call.update({
+                  where: { id: call.id },
+                  data: {
+                    status: 'MISSED',
+                    endedAt: new Date(),
+                  },
+                });
+                ws.send(JSON.stringify({ event: 'call_rejected', reason: 'offline', callId: call.id }));
+              } else {
+                ws.send(JSON.stringify({ event: 'call_initiated', callId: call.id }));
+              }
+              return;
+            }
+
+            if (data.type === 'call_accept') {
+              const { callId, callerId } = data;
+              const startedAt = new Date();
+              await prisma.call.update({
+                where: { id: callId },
+                data: {
+                  status: 'ONGOING',
+                  startedAt,
+                },
+              });
+              sendGlobalToUser(callerId, { event: 'call_accepted', callId });
+              return;
+            }
+
+            if (data.type === 'call_reject') {
+              const { callId, callerId } = data;
+              await prisma.call.update({
+                where: { id: callId },
+                data: {
+                  status: 'REJECTED',
+                  endedAt: new Date(),
+                },
+              });
+              sendGlobalToUser(callerId, { event: 'call_rejected', callId });
+              return;
+            }
+
+            if (data.type === 'call_cancel') {
+              const { callId, receiverId } = data;
+              await prisma.call.update({
+                where: { id: callId },
+                data: {
+                  status: 'MISSED',
+                  endedAt: new Date(),
+                },
+              });
+              sendGlobalToUser(receiverId, { event: 'call_cancelled', callId });
+              return;
+            }
+
+            if (data.type === 'call_end') {
+              const { callId, targetId } = data;
+              const call = await prisma.call.findUnique({
+                where: { id: callId },
+              });
+
+              let duration = 0;
+              const endedAt = new Date();
+              if (call && call.startedAt) {
+                duration = Math.round((endedAt.getTime() - call.startedAt.getTime()) / 1000);
+              }
+
+              await prisma.call.update({
+                where: { id: callId },
+                data: {
+                  status: 'COMPLETED',
+                  endedAt,
+                  duration,
+                },
+              });
+              sendGlobalToUser(targetId, { event: 'call_ended', callId });
+              return;
+            }
+
+            if (data.type === 'webrtc_signal') {
+              const { targetId, signal, callId } = data;
+              sendGlobalToUser(targetId, {
+                event: 'webrtc_signal',
+                senderId: userId,
+                signal,
+                callId,
+              });
+              return;
+            }
+          } catch (e) {
+            logger.error(`Error processing global ws message: ${e}`);
+          }
         });
 
         ws.on('close', () => {
