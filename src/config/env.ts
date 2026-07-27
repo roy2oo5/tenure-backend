@@ -23,6 +23,8 @@ const envSchema = z.object({
   MSG91_AUTHKEY: z.string().optional(),
   MSG91_WIDGET_ID: z.string().optional(),
   MSG91_WIDGET_TOKEN_AUTH: z.string().optional(),
+  FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

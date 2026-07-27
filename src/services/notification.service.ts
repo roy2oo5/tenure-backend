@@ -1,6 +1,8 @@
 import { prisma } from '../config/database';
 import { Notification } from '@prisma/client';
 import { AppError } from '../utils/app-error';
+import { sendPushNotification } from '../config/firebase';
+import { logger } from '../utils/logger';
 
 export class NotificationService {
   /**
@@ -11,13 +13,43 @@ export class NotificationService {
     kind: string,
     message: string
   ): Promise<Notification> {
-    return prisma.notification.create({
+    const notification = await prisma.notification.create({
       data: {
         userId,
         kind,
         message,
       },
     });
+
+    // Send push notification asynchronously
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { fcmToken: true },
+      });
+      if (user?.fcmToken) {
+        let title = 'New Notification';
+        if (kind.startsWith('payment_')) {
+          title = 'Payment Update';
+        } else if (kind.startsWith('request_') || kind === 'new_request') {
+          title = 'Booking Request';
+        } else if (kind.startsWith('call_') || kind === 'missed_call') {
+          title = 'Call Notification';
+        } else if (kind === 'chat_message' || kind === 'message') {
+          title = 'New Message';
+        }
+        sendPushNotification(user.fcmToken, title, message, {
+          kind,
+          notificationId: String(notification.id),
+        }).catch((err) => {
+          logger.error('Error in sendPushNotification call:', err);
+        });
+      }
+    } catch (error) {
+      logger.error('Error fetching user fcmToken for notification:', error);
+    }
+
+    return notification;
   }
 
   /**

@@ -38,5 +38,6 @@ export const updateUserSchema = z.object({
     name: z.string().optional(),
     phone: z.string().optional(),
     role: z.nativeEnum(Role).optional(),
+    fcmToken: z.string().optional(),
   }),
 });

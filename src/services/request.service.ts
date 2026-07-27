@@ -577,6 +577,22 @@ export class RequestService {
       ...cancellationPreviewFields(newRequest, receiver.profile),
     };
 
+    try {
+      const sender = await prisma.user.findUnique({
+        where: { id: senderId },
+        include: { profile: true },
+      });
+      const senderName = sender?.profile?.fullName ?? sender?.name ?? 'Someone';
+
+      await NotificationService.createNotification(
+        data.receiverId,
+        'new_request',
+        `${senderName} sent you a new booking request.`,
+      );
+    } catch (notifErr: any) {
+      console.error('Failed to create new request notification:', notifErr.message);
+    }
+
     sendGlobalToUser(data.receiverId, {
       event: 'request_created',
       requestId: newRequest.id,

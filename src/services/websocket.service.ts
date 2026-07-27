@@ -5,6 +5,7 @@ import url from 'url';
 import { env } from '../config/env';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
+import { sendPushNotification } from '../config/firebase';
 
 // Store active chat connections: map of userId -> open chat sockets
 const connections = new Map<number, Set<WebSocket>>();
@@ -103,6 +104,32 @@ export function initWebSocket(server: HttpServer) {
                   status: 'RINGING',
                 },
               });
+
+              // Send incoming call push notification
+              try {
+                const receiverUser = await prisma.user.findUnique({
+                  where: { id: numericReceiverId },
+                  select: { fcmToken: true },
+                });
+                if (receiverUser?.fcmToken) {
+                  sendPushNotification(
+                    receiverUser.fcmToken,
+                    'Incoming Call',
+                    `${callerProfile?.fullName || 'Someone'} is calling you...`,
+                    {
+                      kind: 'incoming_call',
+                      callId: String(call.id),
+                      callerId: String(userId),
+                      callerName: callerProfile?.fullName || 'User ' + userId,
+                      requestId: String(requestId),
+                    }
+                  ).catch((err) => {
+                    logger.error('Error sending call push notification:', err);
+                  });
+                }
+              } catch (err) {
+                logger.error('Error fetching receiver fcmToken for call:', err);
+              }
 
               // Try sending incoming call event to receiver
               const incomingPayload = {
@@ -363,6 +390,7 @@ export function initWebSocket(server: HttpServer) {
 
           // Deliver to recipient if connected
           const recipientSockets = connections.get(receiverId);
+          let recipientIsActiveInChat = false;
           if (recipientSockets) {
             for (const recipientSocket of recipientSockets) {
               if (
@@ -370,7 +398,40 @@ export function initWebSocket(server: HttpServer) {
                 chatRequestIds.get(recipientSocket) === requestId
               ) {
                 recipientSocket.send(JSON.stringify({ event: 'message', message: formattedMessage }));
+                recipientIsActiveInChat = true;
               }
+            }
+          }
+
+          if (!recipientIsActiveInChat) {
+            try {
+              const recipientUser = await prisma.user.findUnique({
+                where: { id: receiverId },
+                select: { fcmToken: true },
+              });
+              if (recipientUser?.fcmToken) {
+                const senderProfile = await prisma.profile.findUnique({
+                  where: { userId },
+                  select: { fullName: true },
+                });
+                const senderName = senderProfile?.fullName || 'Someone';
+                let notificationBody = content;
+                if (type === 'image') {
+                  notificationBody = '📷 Sent an image';
+                } else if (type === 'voice') {
+                  notificationBody = '🎵 Sent a voice message';
+                }
+
+                sendPushNotification(recipientUser.fcmToken, senderName, notificationBody, {
+                  kind: 'chat_message',
+                  requestId: String(requestId),
+                  senderId: String(userId),
+                }).catch((err) => {
+                  logger.error('Error sending chat push notification:', err);
+                });
+              }
+            } catch (err) {
+              logger.error('Error fetching recipient fcmToken for message:', err);
             }
           }
 
