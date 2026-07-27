@@ -2,10 +2,20 @@ import { RequestService } from '@/services/request.service';
 import { prisma } from '@/config/database';
 import { RequestStatus } from '@prisma/client';
 
+vi.mock('@/config/firebase', () => ({
+  sendPushNotification: vi.fn(),
+}));
+
+vi.mock('@/services/websocket.service', () => ({
+  sendToUserForRequest: vi.fn(),
+  sendGlobalToUser: vi.fn(),
+}));
+
 vi.mock('@/config/database', () => ({
   prisma: {
     request: {
       create: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -27,8 +37,13 @@ vi.mock('@/config/database', () => ({
 }));
 
 describe('RequestService', () => {
+  beforeEach(() => {
+    (prisma.block.findFirst as any).mockResolvedValue(null);
+    (prisma.request.findFirst as any).mockResolvedValue(null);
+  });
+
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.useRealTimers();
   });
 
@@ -108,6 +123,112 @@ describe('RequestService', () => {
       expect(result.mateTenureId).toBe('TN123');
       expect(result.mateAvatar).toBe('https://example.com/avatar.jpg');
       expect(result.status).toBe('pending');
+    });
+
+    it('should reject duplicate active requests to the same receiver', async () => {
+      const mockReceiver = {
+        id: 2,
+        name: 'Jane Doe',
+        tenureId: 'TN123',
+        profile: {
+          fullName: 'Jane Doe Profile',
+          profilePhoto: 'https://example.com/avatar.jpg',
+        },
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
+      (prisma.request.findFirst as any).mockResolvedValue({ id: 101 });
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        }),
+      ).rejects.toThrow('You have already sent a request to this user');
+
+      expect(prisma.request.findFirst).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          receiverId: 2,
+          status: {
+            in: [
+              RequestStatus.PENDING,
+              RequestStatus.ACCEPTED_BY_RECEIVER,
+              RequestStatus.CONFIRMED,
+            ],
+          },
+          OR: [
+            { session: null },
+            { session: { is: { status: { not: 'ENDED' } } } },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('should check duplicates without blocking ended sessions', async () => {
+      const mockReceiver = {
+        id: 2,
+        name: 'Jane Doe',
+        tenureId: 'TN123',
+        profile: {
+          fullName: 'Jane Doe Profile',
+          profilePhoto: 'https://example.com/avatar.jpg',
+        },
+      };
+
+      const mockRequest = {
+        id: 103,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        message: '',
+        status: RequestStatus.PENDING,
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
+      (prisma.request.findFirst as any).mockResolvedValue(null);
+      (prisma.request.create as any).mockResolvedValue(mockRequest);
+
+      await RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+      });
+
+      expect(prisma.request.findFirst).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          receiverId: 2,
+          status: {
+            in: [
+              RequestStatus.PENDING,
+              RequestStatus.ACCEPTED_BY_RECEIVER,
+              RequestStatus.CONFIRMED,
+            ],
+          },
+          OR: [
+            { session: null },
+            { session: { is: { status: { not: 'ENDED' } } } },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(prisma.request.create).toHaveBeenCalled();
     });
 
     it('should create an instant request with a response deadline', async () => {

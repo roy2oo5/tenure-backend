@@ -80,6 +80,12 @@ export type MappedRequest = {
   mateEmailAdded: boolean;
   mateLivePhotoAdded: boolean;
   mateGalleryPhotos: string[];
+  mateLatitude?: number | null;
+  mateLongitude?: number | null;
+  mateInstagram?: string | null;
+  mateFacebook?: string | null;
+  mateYoutube?: string | null;
+  mateWebsite?: string | null;
   status: FrontendRequestStatus;
   sentAt: string;
   sessionStatus?: string | null;
@@ -97,6 +103,11 @@ export type MappedRequest = {
 const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
 const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
 const EXPIRABLE_STATUSES = [
+  RequestStatus.PENDING,
+  RequestStatus.ACCEPTED_BY_RECEIVER,
+  RequestStatus.CONFIRMED,
+] as RequestStatus[];
+const ACTIVE_DUPLICATE_REQUEST_STATUSES = [
   RequestStatus.PENDING,
   RequestStatus.ACCEPTED_BY_RECEIVER,
   RequestStatus.CONFIRMED,
@@ -286,6 +297,12 @@ const profileFields = (
     mateEmailAdded: hasUserProvidedEmail(user.email),
     mateLivePhotoAdded: gallery.some((uri) => uri.toLowerCase().includes('live-photo')),
     mateGalleryPhotos: gallery,
+    mateLatitude: profile?.latitude ?? null,
+    mateLongitude: profile?.longitude ?? null,
+    mateInstagram: profile?.instagram ?? null,
+    mateFacebook: profile?.facebook ?? null,
+    mateYoutube: profile?.youtube ?? null,
+    mateWebsite: profile?.website ?? null,
   };
 };
 
@@ -479,6 +496,23 @@ export class RequestService {
     });
     if (isBlocked) {
       throw new AppError('Cannot send request to a blocked user or if blocked by them', 400);
+    }
+
+    const existingActiveRequest = await prisma.request.findFirst({
+      where: {
+        senderId,
+        receiverId: data.receiverId,
+        status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
+        OR: [
+          { session: null },
+          { session: { is: { status: { not: SessionStatus.ENDED } } } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (existingActiveRequest) {
+      throw new AppError('You have already sent a request to this user', 409);
     }
 
     const instantBooking = Boolean(data.instantBooking);
