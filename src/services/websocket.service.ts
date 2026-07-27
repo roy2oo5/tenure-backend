@@ -6,8 +6,9 @@ import { env } from '../config/env';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 
-// Store active connections: map of userId -> WebSocket
-const connections = new Map<number, WebSocket>();
+// Store active chat connections: map of userId -> open chat sockets
+const connections = new Map<number, Set<WebSocket>>();
+const chatRequestIds = new WeakMap<WebSocket, number>();
 
 // Store active global connections: map of userId -> Set of WebSockets
 const globalConnections = new Map<number, Set<WebSocket>>();
@@ -140,7 +141,11 @@ export function initWebSocket(server: HttpServer) {
       }
 
       // Register connection
-      connections.set(userId, ws);
+      if (!connections.has(userId)) {
+        connections.set(userId, new Set<WebSocket>());
+      }
+      connections.get(userId)!.add(ws);
+      chatRequestIds.set(ws, requestId);
       logger.info(`WebSocket client connected: user=${userId}, request=${requestId}`);
 
       ws.on('message', async (messageData: string) => {
@@ -154,15 +159,24 @@ export function initWebSocket(server: HttpServer) {
 
           if (type === 'location_update') {
             const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
-            const recipientSocket = connections.get(receiverId);
-            if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
-              recipientSocket.send(JSON.stringify({
-                event: 'location_update',
-                userId,
-                latitude: Number(data.latitude),
-                longitude: Number(data.longitude),
-                heading: data.heading != null ? Number(data.heading) : null,
-              }));
+            const recipientSockets = connections.get(receiverId);
+            if (recipientSockets) {
+              for (const recipientSocket of recipientSockets) {
+                if (
+                  recipientSocket.readyState === WebSocket.OPEN &&
+                  chatRequestIds.get(recipientSocket) === requestId
+                ) {
+                  recipientSocket.send(
+                    JSON.stringify({
+                      event: 'location_update',
+                      userId,
+                      latitude: Number(data.latitude),
+                      longitude: Number(data.longitude),
+                      heading: data.heading != null ? Number(data.heading) : null,
+                    }),
+                  );
+                }
+              }
             }
             return;
           }
@@ -200,9 +214,16 @@ export function initWebSocket(server: HttpServer) {
           };
 
           // Deliver to recipient if connected
-          const recipientSocket = connections.get(receiverId);
-          if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
-            recipientSocket.send(JSON.stringify({ event: 'message', message: formattedMessage }));
+          const recipientSockets = connections.get(receiverId);
+          if (recipientSockets) {
+            for (const recipientSocket of recipientSockets) {
+              if (
+                recipientSocket.readyState === WebSocket.OPEN &&
+                chatRequestIds.get(recipientSocket) === requestId
+              ) {
+                recipientSocket.send(JSON.stringify({ event: 'message', message: formattedMessage }));
+              }
+            }
           }
 
           // Send confirmation back to sender
@@ -221,7 +242,13 @@ export function initWebSocket(server: HttpServer) {
       });
 
       ws.on('close', () => {
-        connections.delete(userId);
+        const userSockets = connections.get(userId);
+        if (userSockets) {
+          userSockets.delete(ws);
+          if (userSockets.size === 0) {
+            connections.delete(userId);
+          }
+        }
         logger.info(`WebSocket client disconnected: user=${userId}`);
       });
 
@@ -233,12 +260,31 @@ export function initWebSocket(server: HttpServer) {
 }
 
 export function sendToUser(userId: number, data: any): boolean {
-  const ws = connections.get(userId);
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-    return true;
+  const sockets = connections.get(userId);
+  let sent = false;
+  if (sockets) {
+    for (const ws of sockets) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
+        sent = true;
+      }
+    }
   }
-  return false;
+  return sent;
+}
+
+export function sendToUserForRequest(userId: number, requestId: number, data: any): boolean {
+  const sockets = connections.get(userId);
+  let sent = false;
+  if (sockets) {
+    for (const ws of sockets) {
+      if (ws.readyState === WebSocket.OPEN && chatRequestIds.get(ws) === requestId) {
+        ws.send(JSON.stringify(data));
+        sent = true;
+      }
+    }
+  }
+  return sent;
 }
 
 export function sendGlobalToUser(userId: number, data: any): boolean {

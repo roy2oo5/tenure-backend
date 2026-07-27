@@ -2,7 +2,7 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
-import { sendToUser, sendGlobalToUser } from './websocket.service';
+import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 
 export type CreateRequestInput = {
@@ -889,10 +889,51 @@ export class RequestService {
       ...cancellationPreviewFields(updatedRequest, updatedRequest.receiver.profile),
     };
 
+    const partnerRequest = {
+      ...result,
+      direction: (isSender ? 'received' : 'sent') as 'sent' | 'received',
+      mateUserId: userId,
+      mateName: isSender ? senderName : receiverName,
+      mateTenureId:
+        (isSender ? updatedRequest.sender.tenureId : updatedRequest.receiver.tenureId) ??
+        'Not assigned',
+      mateAvatar: getProfileAvatar(
+        isSender ? updatedRequest.sender.profile : updatedRequest.receiver.profile,
+      ),
+      otp: partner.id === updatedRequest.receiverId ? updatedRequest.otp : null,
+      requesterGender: updatedRequest.sender.profile?.gender ?? null,
+    };
+
     sendGlobalToUser(partner.id, {
       event: 'request_updated',
       requestId: updatedRequest.id,
+      request: partnerRequest,
     });
+
+    sendToUserForRequest(partner.id, updatedRequest.id, {
+      event: 'request_updated',
+      requestId: updatedRequest.id,
+      request: partnerRequest,
+    });
+
+    sendToUserForRequest(userId, updatedRequest.id, {
+      event: 'request_updated',
+      requestId: updatedRequest.id,
+      request: result,
+    });
+
+    if (status === 'cancelled' || status === 'declined') {
+      sendToUserForRequest(partner.id, updatedRequest.id, {
+        event: 'request_cancelled',
+        requestId: updatedRequest.id,
+        request: partnerRequest,
+      });
+      sendToUserForRequest(userId, updatedRequest.id, {
+        event: 'request_cancelled',
+        requestId: updatedRequest.id,
+        request: result,
+      });
+    }
 
     return result;
   }
@@ -961,7 +1002,7 @@ export class RequestService {
     });
 
     const receiverId = request.senderId === userId ? request.receiverId : request.senderId;
-    sendToUser(receiverId, {
+    sendToUserForRequest(receiverId, requestId, {
       event: 'message_deleted',
       requestId,
       messageId,
