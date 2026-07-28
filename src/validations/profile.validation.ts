@@ -22,6 +22,7 @@ export const createProfileSchema = z.object({
       }),
     ),
     gender: z.string().min(1, 'Gender is required'),
+    location: z.string().optional().nullable(),
     country: z.string().min(1, 'Country is required'),
     state: z.string().min(1, 'State is required'),
     district: z.string().min(1, 'District is required'),

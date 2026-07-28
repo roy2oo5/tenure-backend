@@ -6,12 +6,20 @@ import { prisma } from '../config/database';
 async function profileWithTenureId(userId: number, profile: object) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { tenureId: true },
+    select: { tenureId: true, email: true, phone: true },
   });
+  const profileData = profile as { gallery?: unknown };
+  const gallery = Array.isArray(profileData.gallery) ? profileData.gallery : [];
+  const livePhotoAdded = gallery.some((item) =>
+    item?.toString().toLowerCase().includes('live-photo'),
+  );
 
   return {
     ...profile,
     tenureId: user?.tenureId ?? null,
+    phoneAdded: Boolean(user?.phone?.trim()),
+    emailAdded: Boolean(user?.email?.trim()),
+    livePhotoAdded,
   };
 }
 

@@ -50,6 +50,7 @@ model Profile {
   fullName               String    @map("full_name")
   dob                    DateTime? @map("dob") @db.Date
   gender                 String?
+  location               String?
   country                String
   state                  String
   district               String

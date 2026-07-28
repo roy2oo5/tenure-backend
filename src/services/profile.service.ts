@@ -9,6 +9,7 @@ export type ProfileUpsertInput = {
   fullName: string;
   dob: Date;
   gender: string;
+  location?: string | null;
   country: string;
   state: string;
   district: string;
@@ -192,6 +193,7 @@ export class ProfileService {
       fullName: data.fullName,
       dob: data.dob,
       gender: data.gender,
+      location: data.location?.trim() || null,
       country: data.country,
       state: data.state,
       district: data.district,

@@ -79,6 +79,12 @@ Data: ${JSON.stringify(data || {})}`);
         title,
         body,
       },
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'high_importance_channel',
+        },
+      },
       data,
     };
 
