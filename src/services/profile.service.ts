@@ -3,6 +3,7 @@ import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
+import { sendGlobalToAll } from './websocket.service';
 
 export type ProfileUpsertInput = {
   profilePhoto?: string | null;
@@ -92,6 +93,16 @@ function normalizeCategoryRates(
   }
 
   return Object.fromEntries(entries);
+}
+
+function ageFromDob(dob: Date): number {
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age -= 1;
+  }
+  return age;
 }
 
 function maskAadhaar(aadhaarNumber: string): string {
@@ -192,6 +203,7 @@ export class ProfileService {
       profilePhoto: data.profilePhoto ?? null,
       fullName: data.fullName,
       dob: data.dob,
+      isMinor: ageFromDob(data.dob) < 18,
       gender: data.gender,
       location: data.location?.trim() || null,
       country: data.country,
@@ -238,7 +250,7 @@ export class ProfileService {
       emergencyRelation,
     };
 
-    return prisma.profile.upsert({
+    const profile = await prisma.profile.upsert({
       where: { userId },
       update: formattedData,
       create: {
@@ -246,6 +258,22 @@ export class ProfileService {
         ...formattedData,
       },
     });
+
+    const instantFieldsTouched =
+      data.instantAvailable !== undefined ||
+      data.instantAvailableUntil !== undefined ||
+      data.instantCategories !== undefined ||
+      data.instantNote !== undefined;
+
+    if (instantFieldsTouched) {
+      sendGlobalToAll({
+        event: 'instants_updated',
+        userId,
+        instantAvailable: profile.instantAvailable,
+      });
+    }
+
+    return profile;
   }
 
   /**

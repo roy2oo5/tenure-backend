@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const stringArray = z.array(z.string().min(1)).optional().nullable();
 const MAX_HOURLY_RATE = 1199;
+const MIN_PROFILE_AGE = 15;
 const nullableNumber = (schema: z.ZodNumber) =>
   z.preprocess((arg) => {
     if (arg === null || arg === undefined || arg === '') {
@@ -9,6 +10,16 @@ const nullableNumber = (schema: z.ZodNumber) =>
     }
     return typeof arg === 'string' ? Number(arg) : arg;
   }, schema.optional().nullable());
+
+function ageFromDob(dob: Date): number {
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age -= 1;
+  }
+  return age;
+}
 
 export const createProfileSchema = z.object({
   body: z.object({
@@ -19,7 +30,10 @@ export const createProfileSchema = z.object({
       z.date({
         required_error: 'Date of birth is required',
         invalid_type_error: 'Invalid date of birth format',
-      }),
+      }).refine(
+        (dob) => ageFromDob(dob) >= MIN_PROFILE_AGE,
+        `You must be at least ${MIN_PROFILE_AGE} years old to use TenureMate`,
+      ),
     ),
     gender: z.string().min(1, 'Gender is required'),
     location: z.string().optional().nullable(),

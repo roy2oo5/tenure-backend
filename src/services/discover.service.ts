@@ -26,6 +26,7 @@ export type DiscoverMateResult = {
   state: string;
   gender: string | null;
   dob: Date;
+  isMinor: boolean;
   category: string;
   categories: string[];
   hourlyRate: number | null;
@@ -314,6 +315,7 @@ function toDiscoverMate(
     state: profile.state,
     gender: profile.gender,
     dob: profile.dob ?? new Date('2000-01-01'),
+    isMinor: profile.isMinor,
     category,
     categories: profile.categories,
     hourlyRate: rateForCategory(profile, category),

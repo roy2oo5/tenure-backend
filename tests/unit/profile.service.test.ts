@@ -1,6 +1,7 @@
 import { ProfileService } from '@/services/profile.service';
 import { prisma } from '@/config/database';
 import { Prisma } from '@prisma/client';
+import { sendGlobalToAll } from '@/services/websocket.service';
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -19,8 +20,14 @@ vi.mock('@/utils/tenure-id', () => ({
   generateUniqueTenureId: vi.fn().mockResolvedValue('AB123'),
 }));
 
+vi.mock('@/services/websocket.service', () => ({
+  sendGlobalToAll: vi.fn(),
+}));
+
 const extendedProfileDefaults = {
+  isMinor: false,
   about: null,
+  location: null,
   categoryRates: Prisma.JsonNull,
   vibes: [],
   professions: [],
@@ -191,6 +198,89 @@ describe('ProfileService', () => {
           }),
         }),
       );
+    });
+
+    it('should mark 15 to 17 year old profiles as minors', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
+
+      const mockProfileData = {
+        fullName: 'Young User',
+        dob: new Date('2010-06-20'),
+        gender: 'female',
+        country: 'India',
+        state: 'Karnataka',
+        district: 'Bangalore',
+        pinCode: '560001',
+        languages: ['English'],
+        categories: ['Open to any'],
+        hourlyRate: 0,
+      };
+
+      const mockResponse = {
+        id: 2002,
+        userId: 123,
+        ...mockProfileData,
+        isMinor: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
+      (prisma.profile.findUnique as any).mockResolvedValue(null);
+      (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
+
+      await ProfileService.upsertProfile(123, mockProfileData);
+
+      expect(prisma.profile.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            isMinor: true,
+          }),
+          create: expect.objectContaining({
+            isMinor: true,
+          }),
+        }),
+      );
+
+      vi.useRealTimers();
+    });
+
+    it('should broadcast instant updates when ready now changes', async () => {
+      const mockProfileData = {
+        fullName: 'Ready User',
+        dob: new Date('1995-12-15'),
+        gender: 'female',
+        country: 'India',
+        state: 'Karnataka',
+        district: 'Bangalore',
+        pinCode: '560001',
+        languages: ['English'],
+        categories: ['Open to any'],
+        hourlyRate: 0,
+        instantAvailable: true,
+      };
+
+      const mockResponse = {
+        id: 2003,
+        userId: 123,
+        ...mockProfileData,
+        isMinor: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
+      (prisma.profile.findUnique as any).mockResolvedValue(null);
+      (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
+
+      await ProfileService.upsertProfile(123, mockProfileData);
+
+      expect(sendGlobalToAll).toHaveBeenCalledWith({
+        event: 'instants_updated',
+        userId: 123,
+        instantAvailable: true,
+      });
     });
   });
 

@@ -15,6 +15,7 @@ export type CreateRequestInput = {
   fromDateTime: Date;
   toDateTime?: Date | null;
   instantBooking?: boolean;
+  responseTime?: number | null;
   responseDeadlineAt?: Date | null;
   message?: string | null;
   bookingFor?: 'self' | 'someone_else';
@@ -62,6 +63,7 @@ export type MappedRequest = {
   requestHourlyRate: number;
   mateGender?: string | null;
   mateDob?: string | null;
+  mateIsMinor: boolean;
   mateLocation?: string | null;
   mateCategories: string[];
   mateCategoryRates: Record<string, number>;
@@ -101,6 +103,7 @@ export type MappedRequest = {
 };
 
 const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
+const SCHEDULED_REQUEST_LEAD_TIME_MS = 15 * 60 * 1000;
 const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
 export const CONFIRMED_REQUEST_EXPIRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 const EXPIRABLE_STATUSES = [
@@ -169,17 +172,21 @@ const shouldExpireRequest = (request: {
   fromDateTime?: Date | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
+  instantBooking?: boolean | null;
   session?: unknown | null;
 }): boolean => {
+  const isInstantBooking = Boolean(request.instantBooking);
   const startsAt = request.fromDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
   const responseTimedOut = Boolean(
-    request.status === RequestStatus.PENDING &&
+    (request.status === RequestStatus.PENDING ||
+      request.status === RequestStatus.ACCEPTED_BY_RECEIVER) &&
     request.responseDeadlineAt &&
     request.responseDeadlineAt.getTime() <= Date.now(),
   );
   const meetStartedWithoutRequiredConfirmation = Boolean(
     (request.status === RequestStatus.PENDING ||
       request.status === RequestStatus.ACCEPTED_BY_RECEIVER) &&
+      !isInstantBooking &&
       startsAt <= Date.now(),
   );
   const confirmedMeetExpiredWithoutSession = Boolean(
@@ -199,6 +206,7 @@ const effectiveRequestStatus = (request: {
   fromDateTime?: Date | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
+  instantBooking?: boolean | null;
   session?: unknown | null;
 }): RequestStatus => {
   return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
@@ -279,6 +287,16 @@ const hasUserProvidedEmail = (email?: string | null): boolean => {
   return Boolean(normalized && !/^phone_\d+@tenure\.app$/.test(normalized));
 };
 
+const ageFromDob = (dob: Date): number => {
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age -= 1;
+  }
+  return age;
+};
+
 const profileFields = (
   user: {
     phone?: string | null;
@@ -291,6 +309,7 @@ const profileFields = (
   return {
     mateGender: profile?.gender ?? null,
     mateDob: profile?.dob?.toISOString() ?? null,
+    mateIsMinor: profile?.isMinor ?? false,
     mateLocation: profileLocation(profile),
     mateCategories: profile?.categories ?? [],
     mateCategoryRates: categoryRatesRecord(profile?.categoryRates),
@@ -417,6 +436,20 @@ const parseAvailabilityRange = (value?: string | null): { start: number; end: nu
 
 const minutesInDay = (date: Date): number => date.getHours() * 60 + date.getMinutes();
 
+const minimumScheduledStart = (): Date => {
+  const now = new Date();
+  const flooredToMinute = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    0,
+    0,
+  );
+  return new Date(flooredToMinute.getTime() + SCHEDULED_REQUEST_LEAD_TIME_MS);
+};
+
 const requestFitsAvailability = (
   profile: Pick<Profile, 'availableDays' | 'availableTimeRange'> | null | undefined,
   from: Date,
@@ -464,6 +497,7 @@ export class RequestService {
       fromDateTime?: Date | null;
       toDateTime?: Date | null;
       responseDeadlineAt?: Date | null;
+      instantBooking?: boolean | null;
       session?: unknown | null;
     }>,
   ): Promise<void> {
@@ -496,11 +530,12 @@ export class RequestService {
         status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
         OR: [
           {
-            status: RequestStatus.PENDING,
+            status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
             responseDeadlineAt: { lte: now },
           },
           {
             status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+            instantBooking: false,
             fromDateTime: { lte: now },
           },
           {
@@ -523,6 +558,18 @@ export class RequestService {
   ): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
       throw new AppError('You cannot send a mate request to yourself', 400);
+    }
+
+    const senderProfile = await prisma.profile.findUnique({
+      where: { userId: senderId },
+      select: { dob: true, isMinor: true },
+    });
+
+    if (senderProfile?.isMinor || (senderProfile?.dob && ageFromDob(senderProfile.dob) < 18)) {
+      throw new AppError(
+        'Users under 18 can get support from other users but cannot send support requests.',
+        403,
+      );
     }
 
     const receiver = await prisma.user.findUnique({
@@ -567,6 +614,13 @@ export class RequestService {
 
     const instantBooking = Boolean(data.instantBooking);
 
+    if (!instantBooking && data.fromDateTime < minimumScheduledStart()) {
+      throw new AppError(
+        'Scheduled requests must start at least 15 minutes from now',
+        400,
+      );
+    }
+
     if (
       !instantBooking &&
       !requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)
@@ -578,20 +632,16 @@ export class RequestService {
       throw new AppError('This companion is not ready now', 400);
     }
 
-    const responseDeadlineAt = instantBooking
-      ? (data.responseDeadlineAt ?? new Date(new Date(data.fromDateTime).getTime() + 10 * 60 * 1000))
-      : null;
-    if (responseDeadlineAt) {
-      const baseTime = data.fromDateTime ? new Date(data.fromDateTime).getTime() : Date.now();
-      const responseMinutes = Math.round((new Date(responseDeadlineAt).getTime() - baseTime) / (60 * 1000));
-      if (
-        responseMinutes <= 0 ||
-        !INSTANT_RESPONSE_WINDOWS_MINUTES.some(
-          (minutes) => Math.abs(minutes - responseMinutes) <= 1,
-        )
-      ) {
+    let responseDeadlineAt: Date | null = null;
+    if (instantBooking) {
+      const responseMinutes = data.responseTime;
+      if (responseMinutes == null) {
         throw new AppError('Response time must be 10, 20, or 30 minutes', 400);
       }
+      if (!INSTANT_RESPONSE_WINDOWS_MINUTES.some((minutes) => minutes === responseMinutes)) {
+        throw new AppError('Response time must be 10, 20, or 30 minutes', 400);
+      }
+      responseDeadlineAt = new Date(Date.now() + responseMinutes * 60 * 1000);
     }
 
     const bookingFor = data.bookingFor === 'someone_else' ? 'someone_else' : 'self';

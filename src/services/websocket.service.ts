@@ -510,3 +510,15 @@ export function sendGlobalToUser(userId: number, data: any): boolean {
   return sent;
 }
 
+export function sendGlobalToAll(data: any): number {
+  let sent = 0;
+  for (const sockets of globalConnections.values()) {
+    for (const ws of sockets) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
+        sent += 1;
+      }
+    }
+  }
+  return sent;
+}

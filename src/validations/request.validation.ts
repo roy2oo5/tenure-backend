@@ -37,6 +37,10 @@ export const createRequestSchema = z.object({
           .nullable(),
       ),
       instantBooking: z.boolean().optional().default(false),
+      responseTime: z
+        .number()
+        .int('Response time must be 10, 20, or 30 minutes')
+        .optional(),
       responseDeadlineAt: z.preprocess(
         (arg) => (typeof arg === 'string' ? (arg.trim() ? new Date(arg) : null) : arg),
         z
@@ -61,6 +65,16 @@ export const createRequestSchema = z.object({
       readyToPayTip: z.boolean().optional().default(false),
     })
     .superRefine((body, ctx) => {
+      if (
+        body.instantBooking &&
+        (body.responseTime === undefined || ![10, 20, 30].includes(body.responseTime))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['responseTime'],
+          message: 'Response time must be 10, 20, or 30 minutes',
+        });
+      }
       if (body.bookingFor !== 'someone_else') {
         return;
       }

@@ -49,6 +49,7 @@ model Profile {
   profilePhoto           String?   @map("profile_photo")
   fullName               String    @map("full_name")
   dob                    DateTime? @map("dob") @db.Date
+  isMinor                Boolean   @default(false) @map("is_minor")
   gender                 String?
   location               String?
   country                String

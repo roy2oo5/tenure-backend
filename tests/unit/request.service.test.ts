@@ -21,6 +21,9 @@ vi.mock('@/config/database', () => ({
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    profile: {
+      findUnique: vi.fn(),
+    },
     user: {
       findUnique: vi.fn(),
     },
@@ -40,6 +43,10 @@ describe('RequestService', () => {
   beforeEach(() => {
     (prisma.block.findFirst as any).mockResolvedValue(null);
     (prisma.request.findFirst as any).mockResolvedValue(null);
+    (prisma.profile.findUnique as any).mockResolvedValue({
+      dob: new Date('1995-01-01'),
+      isMinor: false,
+    });
   });
 
   afterEach(() => {
@@ -59,6 +66,26 @@ describe('RequestService', () => {
           toDateTime: new Date(),
         }),
       ).rejects.toThrow('You cannot send a mate request to yourself');
+    });
+
+    it('should reject support requests from users under 18', async () => {
+      (prisma.profile.findUnique as any).mockResolvedValue({
+        dob: new Date('2011-01-01'),
+        isMinor: true,
+      });
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date(),
+        }),
+      ).rejects.toThrow('Users under 18 can get support from other users but cannot send support requests');
+
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+      expect(prisma.request.create).not.toHaveBeenCalled();
     });
 
     it('should throw an error if receiver user does not exist', async () => {
@@ -236,6 +263,7 @@ describe('RequestService', () => {
       vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
 
       const responseDeadlineAt = new Date('2027-06-20T08:20:00.000Z');
+      const clientDeadlineAt = new Date('2027-06-20T08:25:00.000Z');
       const mockReceiver = {
         id: 2,
         name: 'Ready User',
@@ -274,7 +302,8 @@ describe('RequestService', () => {
         meetLocation: 'Current GPS',
         fromDateTime: new Date('2027-06-20T08:00:00.000Z'),
         instantBooking: true,
-        responseDeadlineAt,
+        responseTime: 20,
+        responseDeadlineAt: clientDeadlineAt,
         message: 'Instant request',
       });
 
@@ -287,6 +316,100 @@ describe('RequestService', () => {
       });
       expect(result.instantBooking).toBe(true);
       expect(result.responseDeadlineAt).toBe(responseDeadlineAt.toISOString());
+    });
+
+    it('should not apply a response timer to scheduled requests', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
+
+      const mockReceiver = {
+        id: 2,
+        name: 'Scheduled User',
+        tenureId: 'IN123',
+        profile: {
+          fullName: 'Scheduled User Profile',
+          profilePhoto: '',
+          gallery: [],
+          categories: ['Hospital support'],
+          availableDays: [],
+          availableTimeRange: null,
+        },
+      };
+      const mockRequest = {
+        id: 103,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Clinic',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T11:00:00.000Z'),
+        instantBooking: false,
+        responseDeadlineAt: null,
+        message: 'Scheduled request',
+        status: RequestStatus.PENDING,
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
+      (prisma.request.create as any).mockResolvedValue(mockRequest);
+
+      const result = await RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Clinic',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T11:00:00.000Z'),
+        instantBooking: false,
+        responseTime: 10,
+        message: 'Scheduled request',
+      });
+
+      expect(prisma.request.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          instantBooking: false,
+          responseDeadlineAt: null,
+        }),
+      });
+      expect(result.instantBooking).toBe(false);
+      expect(result.responseDeadlineAt).toBeNull();
+    });
+
+    it('should reject scheduled requests less than 15 minutes from now', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:30:30.000Z'));
+
+      const mockReceiver = {
+        id: 2,
+        name: 'Scheduled User',
+        tenureId: 'IN123',
+        profile: {
+          fullName: 'Scheduled User Profile',
+          profilePhoto: '',
+          gallery: [],
+          categories: ['Hospital support'],
+          availableDays: [],
+          availableTimeRange: null,
+        },
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'hospital',
+          categoryLabel: 'Hospital support',
+          meetLocation: 'Clinic',
+          fromDateTime: new Date('2027-06-20T08:44:00.000Z'),
+          instantBooking: false,
+          message: 'Too soon',
+        }),
+      ).rejects.toThrow('Scheduled requests must start at least 15 minutes from now');
+
+      expect(prisma.request.create).not.toHaveBeenCalled();
     });
   });
 
@@ -391,6 +514,7 @@ describe('RequestService', () => {
           id: 201,
           fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
           toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+          instantBooking: false,
           status: RequestStatus.PENDING,
         },
         {
@@ -398,6 +522,7 @@ describe('RequestService', () => {
           id: 202,
           fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
           toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+          instantBooking: false,
           status: RequestStatus.ACCEPTED_BY_RECEIVER,
         },
         {
@@ -405,6 +530,7 @@ describe('RequestService', () => {
           id: 203,
           fromDateTime: new Date('2027-06-20T09:00:00.000Z'),
           toDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          instantBooking: false,
           status: RequestStatus.CONFIRMED,
           otp: '1234',
         },
@@ -428,6 +554,95 @@ describe('RequestService', () => {
         'expired',
         'expired',
       ]);
+    });
+
+    it('should keep ready now pending requests visible until the response deadline', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:05:00.000Z'));
+
+      const receiver = {
+        id: 4,
+        name: 'Ready User',
+        tenureId: 'TN123',
+        profile: {
+          fullName: 'Ready User Profile',
+          profilePhoto: 'https://example.com/avatar.jpg',
+        },
+      };
+      const readyNowRequest = {
+        id: 204,
+        senderId: 3,
+        receiverId: 4,
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Current GPS',
+        message: '',
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        fromDateTime: new Date('2027-06-20T08:00:00.000Z'),
+        toDateTime: null,
+        instantBooking: true,
+        responseDeadlineAt: new Date('2027-06-20T08:10:00.000Z'),
+        status: RequestStatus.PENDING,
+        receiver,
+        session: null,
+      };
+
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([readyNowRequest])
+        .mockResolvedValueOnce([]);
+
+      const result = await RequestService.listUserRequests(3);
+
+      expect(prisma.request.updateMany).not.toHaveBeenCalled();
+      expect(result.sent[0].status).toBe('pending');
+      expect(result.sent[0].instantBooking).toBe(true);
+    });
+
+    it('should expire ready now pending requests after the response deadline', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T08:11:00.000Z'));
+
+      const receiver = {
+        id: 4,
+        name: 'Ready User',
+        tenureId: 'TN123',
+        profile: {
+          fullName: 'Ready User Profile',
+          profilePhoto: 'https://example.com/avatar.jpg',
+        },
+      };
+      const readyNowRequest = {
+        id: 205,
+        senderId: 3,
+        receiverId: 4,
+        categoryId: 'hospital',
+        categoryLabel: 'Hospital support',
+        meetLocation: 'Current GPS',
+        message: '',
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        fromDateTime: new Date('2027-06-20T08:00:00.000Z'),
+        toDateTime: null,
+        instantBooking: true,
+        responseDeadlineAt: new Date('2027-06-20T08:10:00.000Z'),
+        status: RequestStatus.PENDING,
+        receiver,
+        session: null,
+      };
+
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([readyNowRequest])
+        .mockResolvedValueOnce([]);
+
+      const result = await RequestService.listUserRequests(3);
+
+      expect(prisma.request.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [205] } },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        },
+      });
+      expect(result.sent[0].status).toBe('expired');
     });
   });
 
