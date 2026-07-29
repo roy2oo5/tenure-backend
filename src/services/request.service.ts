@@ -102,6 +102,7 @@ export type MappedRequest = {
 
 const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
 const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
+export const CONFIRMED_REQUEST_EXPIRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 const EXPIRABLE_STATUSES = [
   RequestStatus.PENDING,
   RequestStatus.ACCEPTED_BY_RECEIVER,
@@ -165,26 +166,37 @@ const isExpirableStatus = (status: RequestStatus): boolean => EXPIRABLE_STATUSES
 
 const shouldExpireRequest = (request: {
   status: RequestStatus;
+  fromDateTime?: Date | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
   session?: unknown | null;
 }): boolean => {
+  const startsAt = request.fromDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
   const responseTimedOut = Boolean(
     request.status === RequestStatus.PENDING &&
     request.responseDeadlineAt &&
     request.responseDeadlineAt.getTime() <= Date.now(),
   );
-  const scheduledWindowEnded = Boolean(
-    isExpirableStatus(request.status) &&
-    request.toDateTime &&
-    request.toDateTime.getTime() <= Date.now() &&
-    !request.session,
+  const meetStartedWithoutRequiredConfirmation = Boolean(
+    (request.status === RequestStatus.PENDING ||
+      request.status === RequestStatus.ACCEPTED_BY_RECEIVER) &&
+      startsAt <= Date.now(),
   );
-  return responseTimedOut || scheduledWindowEnded;
+  const confirmedMeetExpiredWithoutSession = Boolean(
+    request.status === RequestStatus.CONFIRMED &&
+      startsAt + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS <= Date.now() &&
+      !request.session,
+  );
+
+  return (
+    isExpirableStatus(request.status) &&
+    (responseTimedOut || meetStartedWithoutRequiredConfirmation || confirmedMeetExpiredWithoutSession)
+  );
 };
 
 const effectiveRequestStatus = (request: {
   status: RequestStatus;
+  fromDateTime?: Date | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
   session?: unknown | null;
@@ -449,6 +461,7 @@ export class RequestService {
     requests: Array<{
       id: number;
       status: RequestStatus;
+      fromDateTime?: Date | null;
       toDateTime?: Date | null;
       responseDeadlineAt?: Date | null;
       session?: unknown | null;
@@ -462,6 +475,41 @@ export class RequestService {
 
     await prisma.request.updateMany({
       where: { id: { in: expiredIds } },
+      data: {
+        status: RequestStatus.EXPIRED,
+        otp: null,
+      },
+    });
+  }
+
+  public static async expireStaleRequestsForUsers(
+    senderId: number,
+    receiverId: number,
+  ): Promise<void> {
+    const now = new Date();
+    const confirmedExpiryCutoff = new Date(now.getTime() - CONFIRMED_REQUEST_EXPIRY_WINDOW_MS);
+
+    await prisma.request.updateMany({
+      where: {
+        senderId,
+        receiverId,
+        status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
+        OR: [
+          {
+            status: RequestStatus.PENDING,
+            responseDeadlineAt: { lte: now },
+          },
+          {
+            status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+            fromDateTime: { lte: now },
+          },
+          {
+            status: RequestStatus.CONFIRMED,
+            fromDateTime: { lte: confirmedExpiryCutoff },
+            session: null,
+          },
+        ],
+      },
       data: {
         status: RequestStatus.EXPIRED,
         otp: null,
@@ -497,6 +545,8 @@ export class RequestService {
     if (isBlocked) {
       throw new AppError('Cannot send request to a blocked user or if blocked by them', 400);
     }
+
+    await RequestService.expireStaleRequestsForUsers(senderId, data.receiverId);
 
     const existingActiveRequest = await prisma.request.findFirst({
       where: {

@@ -16,6 +16,7 @@ export const discoverSearchSchema = z.object({
     q: z.string().optional(),
     district: z.string().optional(),
     category: z.string().optional(),
+    languages: z.string().optional(),
     latitude: optionalNumber,
     longitude: optionalNumber,
     currentLatitude: optionalNumber,

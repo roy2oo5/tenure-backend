@@ -7,6 +7,7 @@ export type DiscoverSearchInput = {
   q?: string;
   district?: string | null;
   category?: string | null;
+  languages?: string[];
   latitude?: number | null;
   longitude?: number | null;
   gender?: 'all' | 'male' | 'female';
@@ -267,6 +268,20 @@ function matchesTextQuery(profile: Profile, rawQuery: string): boolean {
   return profile.fullName.trim().toLowerCase().startsWith(q);
 }
 
+function normalizeLanguage(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function matchesLanguages(profile: Profile, selectedLanguages?: string[]): boolean {
+  const selected = (selectedLanguages ?? []).map(normalizeLanguage).filter(Boolean);
+  if (!selected.length) {
+    return true;
+  }
+
+  const profileLanguages = new Set((profile.languages ?? []).map(normalizeLanguage).filter(Boolean));
+  return selected.some((language) => profileLanguages.has(language));
+}
+
 function displayCategory(profile: Profile, requestedCategory?: string | null): string {
   const requested = requestedCategory?.trim().toLowerCase();
   if (requested) {
@@ -419,6 +434,7 @@ export class DiscoverService {
     const filteredProfiles = profiles
       .filter(isDiscoverableProfile)
       .filter((profile) => profileMatchesCategory(profile.categories, input.category))
+      .filter((profile) => matchesLanguages(profile, input.languages))
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
@@ -512,6 +528,7 @@ export class DiscoverService {
     const filteredProfiles = profiles
       .filter(isInstantDiscoverableProfile)
       .filter((profile) => profileMatchesCategory(profile.categories, input.category))
+      .filter((profile) => matchesLanguages(profile, input.languages))
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
@@ -552,7 +569,8 @@ export class DiscoverService {
     const filteredProfiles = savedRows
       .map((row) => profileByUserId.get(row.mateUserId))
       .filter((profile): profile is PublicProfileWithUser => Boolean(profile))
-      .filter(isDiscoverableProfile);
+      .filter(isDiscoverableProfile)
+      .filter((profile) => matchesLanguages(profile, input.languages));
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );

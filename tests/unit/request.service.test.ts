@@ -360,6 +360,75 @@ describe('RequestService', () => {
       expect(result.received[0].mateName).toBe('John Smith Profile');
       expect(result.received[0].status).toBe('confirmed');
     });
+
+    it('should persist stale requests as expired and return them in history state', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T22:00:00.000Z'));
+
+      const receiver = {
+        id: 4,
+        name: 'Jane Doe',
+        tenureId: 'TN123',
+        profile: {
+          fullName: 'Jane Doe Profile',
+          profilePhoto: 'https://example.com/avatar.jpg',
+        },
+      };
+      const baseRequest = {
+        senderId: 3,
+        receiverId: 4,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        message: '',
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        receiver,
+        session: null,
+      };
+      const mockSent = [
+        {
+          ...baseRequest,
+          id: 201,
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+          status: RequestStatus.PENDING,
+        },
+        {
+          ...baseRequest,
+          id: 202,
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+          status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        },
+        {
+          ...baseRequest,
+          id: 203,
+          fromDateTime: new Date('2027-06-20T09:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          status: RequestStatus.CONFIRMED,
+          otp: '1234',
+        },
+      ];
+
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce(mockSent)
+        .mockResolvedValueOnce([]);
+
+      const result = await RequestService.listUserRequests(3);
+
+      expect(prisma.request.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [201, 202, 203] } },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        },
+      });
+      expect(result.sent.map((request) => request.status)).toEqual([
+        'expired',
+        'expired',
+        'expired',
+      ]);
+    });
   });
 
   describe('updateRequestStatus', () => {

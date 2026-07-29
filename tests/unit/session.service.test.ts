@@ -13,6 +13,7 @@ vi.mock('@/config/database', () => ({
     },
     request: {
       findUnique: vi.fn(),
+      update: vi.fn(),
     },
     user: {
       findUnique: vi.fn(),
@@ -28,11 +29,13 @@ vi.mock('@/config/database', () => ({
 
 vi.mock('@/services/websocket.service', () => ({
   sendToUser: vi.fn(),
+  sendGlobalToUser: vi.fn(),
 }));
 
 describe('SessionService', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   const mockRequest = {
@@ -41,6 +44,7 @@ describe('SessionService', () => {
     receiverId: 2,
     status: RequestStatus.CONFIRMED,
     otp: '1234',
+    fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
   };
 
   const mockSenderUser = {
@@ -95,10 +99,35 @@ describe('SessionService', () => {
 
     it('should throw an error if OTP is invalid', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.session.findUnique as any).mockResolvedValue(null);
 
       await expect(
         SessionService.startSession(1, 101, 'invalid-otp')
       ).rejects.toThrow('Invalid verification OTP code');
+    });
+
+    it('should expire confirmed OTP requests 12 hours after meet time if no session started', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T22:00:00.000Z'));
+
+      (prisma.request.findUnique as any).mockResolvedValue({
+        ...mockRequest,
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+      });
+      (prisma.session.findUnique as any).mockResolvedValue(null);
+
+      await expect(
+        SessionService.startSession(1, 101, '1234')
+      ).rejects.toThrow('This request has expired');
+
+      expect(prisma.request.update).toHaveBeenCalledWith({
+        where: { id: 101 },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        },
+      });
+      expect(prisma.session.create).not.toHaveBeenCalled();
     });
 
     it('should return existing mapped session if it already exists', async () => {

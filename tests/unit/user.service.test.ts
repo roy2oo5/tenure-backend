@@ -2,6 +2,7 @@ import { UserService } from '@/services/user.service';
 import { prisma } from '@/config/database';
 import { Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -65,6 +66,10 @@ describe('UserService', () => {
       expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: mockUserData.email } });
       expect(bcrypt.hash).toHaveBeenCalledWith(mockUserData.password, 12);
       expect(prisma.user.create).toHaveBeenCalled();
+      expect(jwt.sign).toHaveBeenCalledWith(
+        { id: 123, email: 'test@example.com', role: Role.USER },
+        expect.any(String),
+      );
       expect(result.token).toBe('mocked-jwt-token');
       expect(result.user.email).toBe(mockUserData.email);
       expect(result.user).not.toHaveProperty('password');

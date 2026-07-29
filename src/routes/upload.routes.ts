@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { protect } from '../middlewares/auth.middleware';
 import { UploadController } from '../controllers/upload.controller';
-import { uploadMiddleware } from '../middlewares/upload.middleware';
+import { genericUploadMiddleware, uploadMiddleware } from '../middlewares/upload.middleware';
 
 const router = Router();
 
@@ -31,7 +31,7 @@ const extractSingleFile = (fieldNamePrimary: string, fieldNameSecondary: string)
 };
 
 // Generic single file upload: POST /api/upload
-router.post('/', protect, uploadMiddleware.single('file'), UploadController.uploadFile);
+router.post('/', protect, genericUploadMiddleware.single('file'), UploadController.uploadFile);
 
 // Profile Picture Upload with AWS Rekognition validation (1 face + adult content check)
 // Routes: POST /api/upload/upload-profile, POST /api/upload/profile-picture

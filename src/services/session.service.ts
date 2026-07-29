@@ -4,6 +4,7 @@ import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
 import { sendToUser, sendGlobalToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
+import { CONFIRMED_REQUEST_EXPIRY_WINDOW_MS } from './request.service';
 
 export type MappedSession = {
   id: number;
@@ -163,16 +164,29 @@ export class SessionService {
       throw new AppError('You are not authorized to start a session for this request', 403);
     }
 
-    if (!_otp || request.otp !== _otp) {
-      throw new AppError('Invalid verification OTP code', 400);
-    }
-
     const existingSession = await prisma.session.findUnique({
       where: { requestId },
     });
 
     if (existingSession) {
       return mapSession(existingSession, userId);
+    }
+
+    const confirmedExpiryAt =
+      request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS;
+    if (Date.now() >= confirmedExpiryAt) {
+      await prisma.request.update({
+        where: { id: requestId },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        },
+      });
+      throw new AppError('This request has expired', 400);
+    }
+
+    if (!_otp || request.otp !== _otp) {
+      throw new AppError('Invalid verification OTP code', 400);
     }
 
     const session = await prisma.session.create({

@@ -144,6 +144,77 @@ describe('DiscoverService', () => {
     expect(byLabel[0].fullName).toBe('Food User');
   });
 
+  it('filters mates who know any selected language', async () => {
+    const profiles = [
+      {
+        userId: 3,
+        fullName: 'Hindi User',
+        profilePhoto: 'https://example.com/a.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Woman',
+        dob: new Date('1998-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 80,
+        languages: ['Hindi'],
+        about: 'Hello',
+        aadhaarVerified: true,
+        user: {
+          tenureId: 'HI123',
+          email: 'hindi@example.com',
+          phone: '9999999991',
+        },
+      },
+      {
+        userId: 4,
+        fullName: 'Kannada User',
+        profilePhoto: 'https://example.com/b.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Man',
+        dob: new Date('1995-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 50,
+        languages: ['Kannada'],
+        about: null,
+        aadhaarVerified: false,
+        user: {
+          tenureId: 'KA123',
+          email: 'kannada@example.com',
+          phone: '9999999992',
+        },
+      },
+      {
+        userId: 5,
+        fullName: 'Tamil User',
+        profilePhoto: 'https://example.com/c.jpg',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Man',
+        dob: new Date('1995-01-01'),
+        categories: ['Shopping support'],
+        hourlyRate: 50,
+        languages: ['Tamil'],
+        about: null,
+        aadhaarVerified: false,
+        user: {
+          tenureId: 'TA123',
+          email: 'tamil@example.com',
+          phone: '9999999993',
+        },
+      },
+    ];
+
+    (prisma.profile.findMany as any).mockResolvedValue(profiles);
+
+    const results = await DiscoverService.searchMates(1, {
+      languages: ['english', 'kannada'],
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].fullName).toBe('Kannada User');
+  });
+
   it('lists instant mates while ready now is enabled without requiring an expiry time', async () => {
     const profiles = [
       {

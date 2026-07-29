@@ -10,7 +10,7 @@ interface DecodedToken {
   email?: string | null;
   role: Role;
   iat: number;
-  exp: number;
+  exp?: number;
 }
 
 export const protect = async (
@@ -40,11 +40,16 @@ export const protect = async (
         email: true,
         role: true,
         name: true,
+        isActive: true,
       },
     });
 
     if (!user) {
       return next(new AppError('The user belonging to this token no longer exists.', 401));
+    }
+
+    if (!user.isActive) {
+      return next(new AppError('This user account has been deactivated.', 401));
     }
 
     // Grant access to protected route by attaching user to request

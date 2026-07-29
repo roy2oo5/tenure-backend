@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import jwt, { type SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
@@ -18,10 +18,7 @@ const formatUser = (user: User): UserWithoutPassword => {
 };
 
 const signToken = (id: number, email: string | null, role: Role): string => {
-  const options: SignOptions = {
-    expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
-  };
-  return jwt.sign({ id, email, role }, env.JWT_SECRET, options);
+  return jwt.sign({ id, email, role }, env.JWT_SECRET);
 };
 
 const normalizePhone = (phone: string): string => {

@@ -3,11 +3,20 @@ import { DiscoverService } from '../services/discover.service';
 import { AppError } from '../utils/app-error';
 
 export class DiscoverController {
+  private static parseLanguages(value: unknown): string[] {
+    const rawValues = Array.isArray(value) ? value : value == null ? [] : [value];
+    return rawValues
+      .flatMap((item) => item.toString().split(','))
+      .map((language) => language.trim())
+      .filter(Boolean);
+  }
+
   private static buildSearchInput(req: Request) {
     return {
       q: req.query.q as string | undefined,
       district: req.query.district as string | undefined,
       category: req.query.category as string | undefined,
+      languages: DiscoverController.parseLanguages(req.query.languages),
       latitude:
         req.query.latitude != null
           ? Number(req.query.latitude)
