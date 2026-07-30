@@ -32,6 +32,7 @@
     "multer": "^2.2.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
+    "twilio": "^6.0.2",
     "winston": "^3.13.0",
     "ws": "^8.21.0",
     "zod": "^3.23.8"

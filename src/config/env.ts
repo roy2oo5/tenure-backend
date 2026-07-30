@@ -25,6 +25,10 @@ const envSchema = z.object({
   MSG91_WIDGET_TOKEN_AUTH: z.string().optional(),
   FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_API_KEY: z.string().optional(),
+  TWILIO_API_SECRET: z.string().optional(),
+  TWILIO_TWIML_APP_SID: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

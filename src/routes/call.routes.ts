@@ -4,9 +4,16 @@ import { protect } from '../middlewares/auth.middleware';
 
 const router = Router();
 
-// Protect all call routes
+// Step B: Public Twilio Voice Webhook HTTP Endpoints (called directly by Twilio servers)
+router.all('/twilio-voice', CallController.twilioVoiceWebhook);
+router.all('/voice-webhook', CallController.twilioVoiceWebhook);
+router.all('/twiml', CallController.twilioVoiceWebhook);
+
+// Protected call routes for mobile / frontend clients
 router.use(protect);
 
+// Step A: Access Token Endpoint for clients
+router.get('/token', CallController.getTwilioToken);
 router.get('/history', CallController.getHistory);
 
 export default router;
