@@ -217,6 +217,110 @@ export interface ProcessAadhaarResult {
 }
 
 /**
+ * Helper to match extracted Aadhaar demographics against app user profile details.
+ */
+export interface DemographicMatchResult {
+  matchType: 'full_match' | 'partial_match' | 'mismatch';
+  nameMatches: boolean;
+  dobMatches: boolean;
+  genderMatches: boolean;
+  message: string;
+}
+
+export function matchAadhaarDemographics(
+  aadhaar: AadhaarDemographics,
+  profile: { fullName: string; dob?: Date | string | null; gender?: string | null }
+): DemographicMatchResult {
+  // 1. Normalize and compare Names
+  const normAadhaarName = aadhaar.name
+    .toLowerCase()
+    .replace(/(?:mr|mrs|ms|dr|shri|smt)\.?\s+/gi, '')
+    .replace(/[^\w\s]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const normProfileName = profile.fullName
+    .toLowerCase()
+    .replace(/(?:mr|mrs|ms|dr|shri|smt)\.?\s+/gi, '')
+    .replace(/[^\w\s]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const aadhaarTokens = new Set(normAadhaarName.split(' ').filter(Boolean));
+  const profileTokens = new Set(normProfileName.split(' ').filter(Boolean));
+
+  let sharedTokens = 0;
+  for (const token of aadhaarTokens) {
+    if (profileTokens.has(token)) sharedTokens++;
+  }
+
+  const nameMatches =
+    normAadhaarName === normProfileName ||
+    (aadhaarTokens.size > 0 && sharedTokens >= Math.min(aadhaarTokens.size, profileTokens.size));
+
+  // 2. Compare DOB
+  let dobMatches = false;
+  if (aadhaar.dob && profile.dob) {
+    const profDate = profile.dob instanceof Date ? profile.dob : new Date(profile.dob);
+    if (!isNaN(profDate.getTime())) {
+      const profYear = profDate.getUTCFullYear();
+      const profMonth = profDate.getUTCMonth() + 1;
+      const profDay = profDate.getUTCDate();
+
+      const parts = aadhaar.dob.trim().split(/[-/]/);
+      if (parts.length === 3) {
+        let year: number, month: number, day: number;
+        if (parts[0].length === 4) {
+          year = parseInt(parts[0], 10);
+          month = parseInt(parts[1], 10);
+          day = parseInt(parts[2], 10);
+        } else {
+          day = parseInt(parts[0], 10);
+          month = parseInt(parts[1], 10);
+          year = parseInt(parts[2], 10);
+        }
+        dobMatches = year === profYear && month === profMonth && day === profDay;
+      } else if (parts.length === 1 && parts[0].length === 4) {
+        // Year of birth match
+        dobMatches = parseInt(parts[0], 10) === profYear;
+      }
+    }
+  }
+
+  // 3. Compare Gender
+  const normAadhaarGender = (aadhaar.gender || '').trim().toUpperCase();
+  const normProfileGender = (profile.gender || '').trim().toUpperCase();
+  const genderMatches =
+    normAadhaarGender === normProfileGender ||
+    (normAadhaarGender.startsWith('M') && normProfileGender.startsWith('M')) ||
+    (normAadhaarGender.startsWith('F') && normProfileGender.startsWith('F'));
+
+  let matchType: 'full_match' | 'partial_match' | 'mismatch';
+  let message: string;
+
+  if (nameMatches && dobMatches) {
+    matchType = 'full_match';
+    message = 'Aadhaar details match user profile perfectly.';
+  } else if (nameMatches || dobMatches) {
+    matchType = 'partial_match';
+    message = nameMatches
+      ? 'Aadhaar name matches profile, but date of birth differs.'
+      : 'Aadhaar DOB matches profile, but name differs.';
+  } else {
+    matchType = 'mismatch';
+    message = `Aadhaar details ('${aadhaar.name}') do not match user profile ('${profile.fullName}').`;
+  }
+
+  return {
+    matchType,
+    nameMatches,
+    dobMatches,
+    genderMatches,
+    message,
+  };
+}
+
+/**
  * Helper to fetch UIDAI Public Key / Certificate PEM.
  * Checks process.env.UIDAI_PUBLIC_KEY_PEM first, then looks for uidai_auth_prod_2028.cer in backend root directory.
  */

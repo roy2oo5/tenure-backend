@@ -3,7 +3,7 @@ import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 import { AppError } from '../utils/app-error';
 import { sendGlobalToAll } from './websocket.service';
-import { processAadhaarSecureQR, AadhaarDemographics } from '../utils/aadhaar-qr';
+import { processAadhaarSecureQR, AadhaarDemographics, matchAadhaarDemographics } from '../utils/aadhaar-qr';
 
 export type ProfileUpsertInput = {
   profilePhoto?: string | null;
@@ -337,6 +337,7 @@ export class ProfileService {
     profile: Profile;
     demographics: AadhaarDemographics;
     isValidSignature: boolean;
+    matchType: string;
     message: string;
   }> {
     const profile = await prisma.profile.findUnique({ where: { userId } });
@@ -350,6 +351,21 @@ export class ProfileService {
     }
 
     const demographics = result.data;
+
+    // Match extracted Aadhaar details against logged in user profile
+    const match = matchAadhaarDemographics(demographics, {
+      fullName: profile.fullName,
+      dob: profile.dob,
+      gender: profile.gender,
+    });
+
+    if (match.matchType === 'mismatch') {
+      throw new AppError(
+        `Aadhaar details do not match user profile. Aadhaar Name: "${demographics.name}", Profile Name: "${profile.fullName}".`,
+        400,
+      );
+    }
+
     const refId = demographics.referenceId || '000000000000';
     const digits = refId.replace(/\D/g, '');
     const maskedAadhaar = maskAadhaar(digits);
@@ -366,7 +382,8 @@ export class ProfileService {
       profile: updatedProfile,
       demographics,
       isValidSignature: true,
-      message: 'Aadhaar Secure QR code verified successfully',
+      matchType: match.matchType,
+      message: match.message,
     };
   }
 

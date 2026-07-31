@@ -6,6 +6,7 @@ import {
   parseAadhaarBuffer,
   verifyAadhaarSignature,
   processAadhaarSecureQR,
+  matchAadhaarDemographics,
   AadhaarDemographics,
 } from '../../src/utils/aadhaar-qr';
 
@@ -261,6 +262,53 @@ describe('Aadhaar Secure QR Code Utility Module', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.error).toMatch(/Zlib decompression failed/i);
+    });
+  });
+
+  describe('matchAadhaarDemographics', () => {
+    const mockAadhaarData: AadhaarDemographics = {
+      referenceId: '12345678',
+      name: 'Rishith M Roy',
+      dob: '15-08-1998',
+      gender: 'M',
+      careOf: '',
+      district: '',
+      landmark: '',
+      house: '',
+      location: '',
+      pincode: '',
+      postOffice: '',
+      state: '',
+      street: '',
+      subDistrict: '',
+      vtc: '',
+      emailMobilePresentBit: '3',
+      photoJpeg2000: Buffer.alloc(0),
+    };
+
+    it('should return full_match when name, dob, and gender match', () => {
+      const result = matchAadhaarDemographics(mockAadhaarData, {
+        fullName: 'Rishith Roy',
+        dob: new Date('1998-08-15'),
+        gender: 'Male',
+      });
+
+      expect(result.matchType).toBe('full_match');
+      expect(result.nameMatches).toBe(true);
+      expect(result.dobMatches).toBe(true);
+      expect(result.genderMatches).toBe(true);
+    });
+
+    it('should return mismatch when name and DOB do not match user profile', () => {
+      const result = matchAadhaarDemographics(mockAadhaarData, {
+        fullName: 'John Doe',
+        dob: new Date('1990-01-01'),
+        gender: 'Male',
+      });
+
+      expect(result.matchType).toBe('mismatch');
+      expect(result.nameMatches).toBe(false);
+      expect(result.dobMatches).toBe(false);
     });
   });
 });
