@@ -457,6 +457,7 @@ router.post(
   validate(verifyAadhaarSchema),
   ProfileController.verifyAadhaar,
 );
+router.post('/profile/aadhaar-qr-verification', protect, ProfileController.verifyAadhaarQR);
 
 router.get('/discover', protect, validate(discoverSearchSchema), DiscoverController.search);
 router.get(

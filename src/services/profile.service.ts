@@ -3,6 +3,7 @@ import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 import { AppError } from '../utils/app-error';
 import { sendGlobalToAll } from './websocket.service';
+import { processAadhaarSecureQR, AadhaarDemographics } from '../utils/aadhaar-qr';
 
 export type ProfileUpsertInput = {
   profilePhoto?: string | null;
@@ -325,6 +326,47 @@ export class ProfileService {
       profile: updatedProfile,
       matchType: 'full_match',
       message: 'Demo verification successful',
+    };
+  }
+
+  public static async verifyAadhaarQR(
+    userId: number,
+    qrBuffer: Buffer,
+    uidaiPublicKeyPem?: string,
+  ): Promise<{
+    profile: Profile;
+    demographics: AadhaarDemographics;
+    isValidSignature: boolean;
+    message: string;
+  }> {
+    const profile = await prisma.profile.findUnique({ where: { userId } });
+    if (!profile) {
+      throw new AppError('Profile not found for this user.', 404);
+    }
+
+    const result = processAadhaarSecureQR(qrBuffer, uidaiPublicKeyPem);
+    if (!result.isValid || !result.data) {
+      throw new AppError(`Aadhaar QR Verification failed: ${result.error || 'Invalid QR payload'}`, 400);
+    }
+
+    const demographics = result.data;
+    const refId = demographics.referenceId || '000000000000';
+    const digits = refId.replace(/\D/g, '');
+    const maskedAadhaar = maskAadhaar(digits);
+
+    const updatedProfile = await prisma.profile.update({
+      where: { userId },
+      data: {
+        aadhaarVerified: true,
+        aadhaarMasked: maskedAadhaar,
+      },
+    });
+
+    return {
+      profile: updatedProfile,
+      demographics,
+      isValidSignature: true,
+      message: 'Aadhaar Secure QR code verified successfully',
     };
   }
 

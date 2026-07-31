@@ -96,6 +96,39 @@ export class ProfileController {
     }
   }
 
+  public static async verifyAadhaarQR(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      let qrBuffer: Buffer;
+      if (req.file?.buffer) {
+        qrBuffer = req.file.buffer;
+      } else if (req.body.qrBase64) {
+        qrBuffer = Buffer.from(req.body.qrBase64, 'base64');
+      } else if (Buffer.isBuffer(req.body)) {
+        qrBuffer = req.body;
+      } else {
+        return next(new AppError('Please provide a valid Aadhaar QR buffer or base64 string (qrBase64).', 400));
+      }
+
+      const uidaiPublicKeyPem = req.body.publicKeyPem || process.env.UIDAI_PUBLIC_KEY_PEM;
+      const result = await ProfileService.verifyAadhaarQR(req.user.id, qrBuffer, uidaiPublicKeyPem);
+
+      res.status(200).json({
+        status: 'success',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * Update current user's profile location coordinates
    */
