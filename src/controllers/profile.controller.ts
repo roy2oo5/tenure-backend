@@ -10,9 +10,10 @@ async function profileWithTenureId(userId: number, profile: object) {
   });
   const profileData = profile as { gallery?: unknown };
   const gallery = Array.isArray(profileData.gallery) ? profileData.gallery : [];
-  const livePhotoAdded = gallery.some((item) =>
-    item?.toString().toLowerCase().includes('live-photo'),
-  );
+  const explicitLivePhoto = (profileData as { livePhotoUrl?: unknown }).livePhotoUrl;
+  const livePhotoAdded =
+    (typeof explicitLivePhoto === 'string' && explicitLivePhoto.trim().length > 0) ||
+    gallery.some((item) => item?.toString().toLowerCase().includes('live-photo'));
 
   return {
     ...profile,

@@ -326,7 +326,9 @@ const profileFields = (
     mateAadhaarVerified: profile?.aadhaarVerified ?? false,
     matePhoneAdded: Boolean(user.phone?.trim()),
     mateEmailAdded: hasUserProvidedEmail(user.email),
-    mateLivePhotoAdded: gallery.some((uri) => uri.toLowerCase().includes('live-photo')),
+    mateLivePhotoAdded:
+      Boolean(profile?.livePhotoUrl?.trim()) ||
+      gallery.some((uri) => uri.toLowerCase().includes('live-photo')),
     mateGalleryPhotos: gallery,
     mateLatitude: profile?.latitude ?? null,
     mateLongitude: profile?.longitude ?? null,
@@ -560,18 +562,6 @@ export class RequestService {
       throw new AppError('You cannot send a mate request to yourself', 400);
     }
 
-    const senderProfile = await prisma.profile.findUnique({
-      where: { userId: senderId },
-      select: { dob: true, isMinor: true },
-    });
-
-    if (senderProfile?.isMinor || (senderProfile?.dob && ageFromDob(senderProfile.dob) < 18)) {
-      throw new AppError(
-        'Users under 18 can get support from other users but cannot send support requests.',
-        403,
-      );
-    }
-
     const receiver = await prisma.user.findUnique({
       where: { id: data.receiverId },
       include: { profile: true },
@@ -579,6 +569,12 @@ export class RequestService {
 
     if (!receiver) {
       throw new AppError('The target companion user does not exist', 404);
+    }
+    if (
+      receiver.profile?.isMinor ||
+      (receiver.profile?.dob && ageFromDob(receiver.profile.dob) < 18)
+    ) {
+      throw new AppError('Users under 18 cannot provide support or receive support requests.', 403);
     }
 
     const isBlocked = await prisma.block.findFirst({

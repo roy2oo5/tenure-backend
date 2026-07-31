@@ -5,6 +5,8 @@ import { genericUploadMiddleware, uploadMiddleware } from '../middlewares/upload
 
 const router = Router();
 
+router.get('/avatars', protect, UploadController.listAvatars);
+
 // Endpoint: GET /api/upload/media/:key
 // Serves uploaded media through the backend, including private S3 objects.
 router.get('/media/:key', UploadController.getUploadedFile);
@@ -55,6 +57,22 @@ router.post(
 // Routes: POST /api/upload/gallery, POST /api/upload/live-gallery
 router.post(
   '/gallery',
+  protect,
+  galleryUploadMiddleware,
+  extractSingleFile('galleryPhoto', 'file'),
+  UploadController.uploadGalleryPhoto,
+);
+
+router.post(
+  '/self-gallery',
+  protect,
+  galleryUploadMiddleware,
+  extractSingleFile('galleryPhoto', 'file'),
+  UploadController.uploadGalleryPhoto,
+);
+
+router.post(
+  '/vehicle-gallery',
   protect,
   galleryUploadMiddleware,
   extractSingleFile('galleryPhoto', 'file'),

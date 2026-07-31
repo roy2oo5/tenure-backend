@@ -16,8 +16,6 @@ const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   AWS_REGION: z.string().optional(),
   AWS_S3_BUCKET: z.string().optional(),
-  DIDIT_API_KEY: z.string().optional(),
-  DIDIT_API_BASE_URL: z.string().url().default('https://verification.didit.me'),
   DIDIT_WEBHOOK_SECRET: z.string().optional(),
   DIDIT_WEBHOOK_KEY: z.string().optional(),
   MSG91_AUTHKEY: z.string().optional(),

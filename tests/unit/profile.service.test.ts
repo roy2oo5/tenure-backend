@@ -47,6 +47,7 @@ const extendedProfileDefaults = {
   aadhaarVerified: false,
   aadhaarMasked: null,
   gallery: [],
+  livePhotoUrl: null,
   instagram: null,
   facebook: null,
   youtube: null,
@@ -113,6 +114,7 @@ describe('ProfileService', () => {
         select: {
           aadhaarVerified: true,
           aadhaarMasked: true,
+          livePhotoUrl: true,
           instantAvailable: true,
           instantAvailableUntil: true,
           instantCategories: true,
@@ -236,9 +238,17 @@ describe('ProfileService', () => {
         expect.objectContaining({
           update: expect.objectContaining({
             isMinor: true,
+            categories: [],
+            hourlyRate: null,
+            categoryRates: {},
+            instantAvailable: false,
           }),
           create: expect.objectContaining({
             isMinor: true,
+            categories: [],
+            hourlyRate: null,
+            categoryRates: {},
+            instantAvailable: false,
           }),
         }),
       );

@@ -1,7 +1,6 @@
 import { prisma } from '../config/database';
 import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
-import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
 import { sendGlobalToAll } from './websocket.service';
 
@@ -27,6 +26,10 @@ export type ProfileUpsertInput = {
   qualification?: string | null;
   bloodGroup?: string | null;
   vehicles?: string[] | null;
+  canRideBike?: boolean | null;
+  willingRequesterBike?: boolean | null;
+  canDriveCar?: boolean | null;
+  willingRequesterCar?: boolean | null;
   interests?: string[] | null;
   availableDays?: string[] | null;
   availableTimeRange?: string | null;
@@ -36,6 +39,7 @@ export type ProfileUpsertInput = {
   comfortWith?: string | null;
   comfortNotWith?: string | null;
   gallery?: string[] | null;
+  livePhotoUrl?: string | null;
   instagram?: string | null;
   facebook?: string | null;
   youtube?: string | null;
@@ -110,15 +114,6 @@ function maskAadhaar(aadhaarNumber: string): string {
   return digits.length >= 4 ? `XXXX XXXX ${digits.slice(-4)}` : 'XXXX XXXX XXXX';
 }
 
-function diditApiKey(): string | undefined {
-  return (
-    env.DIDIT_API_KEY ??
-    process.env.DIDIT_API_KEY ??
-    process.env.DIDIT_API_TOKEN ??
-    process.env.DIDIT_KEY
-  )?.trim();
-}
-
 export class ProfileService {
   /**
    * Upsert a user profile (create if not exists, update if exists)
@@ -141,6 +136,7 @@ export class ProfileService {
       select: {
         aadhaarVerified: true,
         aadhaarMasked: true,
+        livePhotoUrl: true,
         instantAvailable: true,
         instantAvailableUntil: true,
         instantCategories: true,
@@ -155,7 +151,10 @@ export class ProfileService {
       },
     });
 
-    const instantAvailable =
+    const isMinor = ageFromDob(data.dob) < 18;
+    const instantAvailable = isMinor
+      ? false
+      :
       data.instantAvailable !== undefined
         ? data.instantAvailable
         : (existingProfile?.instantAvailable ?? false);
@@ -203,7 +202,7 @@ export class ProfileService {
       profilePhoto: data.profilePhoto ?? null,
       fullName: data.fullName,
       dob: data.dob,
-      isMinor: ageFromDob(data.dob) < 18,
+      isMinor,
       gender: data.gender,
       location: data.location?.trim() || null,
       country: data.country,
@@ -213,15 +212,29 @@ export class ProfileService {
       latitude: data.latitude ?? null,
       longitude: data.longitude ?? null,
       languages: data.languages,
-      categories: data.categories ?? [],
-      hourlyRate: data.hourlyRate !== undefined ? data.hourlyRate : null,
-      categoryRates: normalizeCategoryRates(data.categories ?? [], data.categoryRates),
+      categories: isMinor ? [] : (data.categories ?? []),
+      hourlyRate: isMinor
+        ? null
+        : data.hourlyRate !== undefined
+          ? data.hourlyRate
+          : null,
+      categoryRates: isMinor
+        ? {}
+        : normalizeCategoryRates(data.categories ?? [], data.categoryRates),
       about: data.about ?? null,
       vibes: data.vibes ?? [],
       professions: data.professions ?? [],
       qualification: data.qualification?.trim() || null,
       bloodGroup: data.bloodGroup?.trim() || null,
       vehicles: data.vehicles ?? [],
+      canRideBike: data.vehicles?.includes('bike') ? (data.canRideBike ?? null) : null,
+      willingRequesterBike: data.vehicles?.includes('bike')
+        ? (data.willingRequesterBike ?? null)
+        : null,
+      canDriveCar: data.vehicles?.includes('car') ? (data.canDriveCar ?? null) : null,
+      willingRequesterCar: data.vehicles?.includes('car')
+        ? (data.willingRequesterCar ?? null)
+        : null,
       interests: data.interests ?? [],
       availableDays: data.availableDays ?? [],
       availableTimeRange: normalizeTimeRange(data.availableTimeRange),
@@ -233,6 +246,10 @@ export class ProfileService {
       aadhaarVerified: existingProfile?.aadhaarVerified ?? false,
       aadhaarMasked: existingProfile?.aadhaarMasked ?? null,
       gallery: data.gallery ?? [],
+      livePhotoUrl:
+        data.livePhotoUrl !== undefined
+          ? data.livePhotoUrl?.trim() || null
+          : (existingProfile?.livePhotoUrl ?? null),
       instagram: data.instagram ?? null,
       facebook: data.facebook ?? null,
       youtube: data.youtube ?? null,
@@ -289,62 +306,25 @@ export class ProfileService {
     userId: number,
     data: { aadhaarNumber: string; fullName: string; dob: string },
   ): Promise<{ profile: Profile | null; matchType: string; message: string }> {
-    const apiKey = diditApiKey();
-    if (!apiKey) {
-      throw new AppError('Aadhaar verification is not configured.', 503);
-    }
-
     const profile = await prisma.profile.findUnique({ where: { userId } });
     if (!profile) {
       throw new AppError('Profile not found for this user.', 404);
     }
-
-    const form = new FormData();
-    form.append('issuing_state', 'IND');
-    form.append('services', 'ind_aadhaar');
-    form.append('vendor_data', userId);
-    form.append('consent', 'true');
-    form.append('full_name', data.fullName.trim());
-    form.append('date_of_birth', data.dob);
-    form.append('personal_number', data.aadhaarNumber);
-
-    const response = await fetch(`${env.DIDIT_API_BASE_URL}/v3/database-validation/`, {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
+    const digits = data.aadhaarNumber.replace(/\D/g, '');
+    if (!/^\d{12}$/.test(digits)) {
+      throw new AppError('Enter a valid 12-digit Aadhaar number.', 400);
+    }
+    const updatedProfile = await prisma.profile.update({
+      where: { userId },
+      data: {
+        aadhaarVerified: true,
+        aadhaarMasked: maskAadhaar(digits),
       },
-      body: form,
     });
-
-    const responseBody = (await response.json().catch(() => null)) as {
-      match_type?: unknown;
-    } | null;
-    if (!response.ok) {
-      throw new AppError('Aadhaar verification failed. Please try again.', response.status);
-    }
-
-    const matchType =
-      typeof responseBody?.match_type === 'string' ? responseBody.match_type : 'no_match';
-    if (matchType === 'full_match') {
-      const updatedProfile = await prisma.profile.update({
-        where: { userId },
-        data: {
-          aadhaarVerified: true,
-          aadhaarMasked: maskAadhaar(data.aadhaarNumber),
-        },
-      });
-      return {
-        profile: updatedProfile,
-        matchType,
-        message: 'Verification success',
-      };
-    }
-
     return {
-      profile,
-      matchType,
-      message:
-        matchType === 'partial_match' ? 'Details incorrect, cross check' : 'Details not matched',
+      profile: updatedProfile,
+      matchType: 'full_match',
+      message: 'Demo verification successful',
     };
   }
 
@@ -401,6 +381,28 @@ export class ProfileService {
           push: photoUrl,
         },
       },
+    });
+  }
+
+  public static async setLivePhoto(userId: number, photoUrl: string): Promise<Profile> {
+    const existingProfile = await prisma.profile.findUnique({ where: { userId } });
+    if (!existingProfile) {
+      return prisma.profile.create({
+        data: {
+          userId,
+          fullName: 'User',
+          country: '',
+          state: '',
+          district: '',
+          pinCode: '',
+          languages: [],
+          livePhotoUrl: photoUrl,
+        },
+      });
+    }
+    return prisma.profile.update({
+      where: { userId },
+      data: { livePhotoUrl: photoUrl },
     });
   }
 

@@ -20,6 +20,12 @@ export class ReportService {
     if (!message || !message.trim()) {
       throw new AppError('Message/description is required', 400);
     }
+    if (message.trim().length > 50) {
+      throw new AppError('Report description must be 50 characters or fewer', 400);
+    }
+    if (message.trim().length > 50) {
+      throw new AppError('Report description must be 50 characters or fewer', 400);
+    }
 
     if (targetId) {
       if (reporterId === targetId) {

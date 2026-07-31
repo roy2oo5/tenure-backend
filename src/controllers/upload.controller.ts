@@ -9,6 +9,19 @@ import {
 import { ProfileService } from '../services/profile.service';
 
 export class UploadController {
+  public static async listAvatars(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const avatars = await UploadService.listAvatars(req.get('host'), req.protocol);
+      res.status(200).json({ status: 'success', data: { avatars } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * Upload a single image file (generic)
    */
@@ -116,12 +129,24 @@ export class UploadController {
 
       const host = req.get('host');
       const protocol = req.protocol;
-      const url = await UploadService.uploadFile(req.file, 'gallery', host, protocol);
+      const uploadRoute = req.route?.path;
+      const isLivePhoto = uploadRoute === '/live-gallery';
+      const folder =
+        uploadRoute === '/self-gallery'
+          ? 'gallery/self'
+          : uploadRoute === '/vehicle-gallery'
+            ? 'gallery/vehicle'
+            : isLivePhoto
+              ? 'gallery/live-photo'
+              : 'gallery';
+      const url = await UploadService.uploadFile(req.file, folder, host, protocol);
 
       // If authenticated user is present, append photo to user's profile gallery in DB
       let profile = null;
       if (req.user?.id) {
-        profile = await ProfileService.addGalleryPhoto(req.user.id, url);
+        profile = isLivePhoto
+          ? await ProfileService.setLivePhoto(req.user.id, url)
+          : await ProfileService.addGalleryPhoto(req.user.id, url);
       }
 
       res.status(200).json({

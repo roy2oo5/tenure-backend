@@ -32,6 +32,8 @@ model User {
   savedByUsers     SavedMate[]    @relation("SavedMateUser")
   blocksSent       Block[]        @relation("UserBlocks")
   blocksReceived   Block[]        @relation("UserBlockedBy")
+  mutesSent        Mute[]         @relation("UserMutes")
+  mutesReceived    Mute[]         @relation("UserMutedBy")
   reportsSent      Report[]       @relation("ReportedBy")
   reportsReceived  Report[]       @relation("ReportedUser")
   callsSent        Call[]         @relation("CallsSent")
@@ -68,6 +70,10 @@ model Profile {
   qualification          String?
   bloodGroup             String?   @map("blood_group")
   vehicles               String[]  @default([])
+  canRideBike            Boolean?  @map("can_ride_bike")
+  willingRequesterBike   Boolean?  @map("willing_requester_bike")
+  canDriveCar            Boolean?  @map("can_drive_car")
+  willingRequesterCar    Boolean?  @map("willing_requester_car")
   interests              String[]  @default([])
   availableDays          String[]  @default([]) @map("available_days")
   availableTimeRange     String?   @map("available_time_range")
@@ -79,6 +85,7 @@ model Profile {
   aadhaarVerified        Boolean   @default(false) @map("aadhaar_verified")
   aadhaarMasked          String?   @map("aadhaar_masked")
   gallery                String[]  @default([])
+  livePhotoUrl           String?   @map("live_photo_url")
   instagram              String?
   facebook               String?
   youtube                String?
@@ -228,6 +235,20 @@ model Block {
 
   @@unique([blockerId, blockedId])
   @@map("blocks")
+}
+
+model Mute {
+  id          Int      @id @default(autoincrement())
+  muterId     Int      @map("muter_id")
+  mutedUserId Int      @map("muted_user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  muter     User @relation("UserMutes", fields: [muterId], references: [id], onDelete: Cascade)
+  mutedUser User @relation("UserMutedBy", fields: [mutedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([muterId, mutedUserId])
+  @@index([mutedUserId])
+  @@map("mutes")
 }
 
 model Report {

@@ -3,6 +3,7 @@ import { UserController } from '../controllers/user.controller';
 import { ProfileController } from '../controllers/profile.controller';
 import { DiscoverController } from '../controllers/discover.controller';
 import { BlockController } from '../controllers/block.controller';
+import { MuteController } from '../controllers/mute.controller';
 import { validate } from '../middlewares/validation.middleware';
 import { protect, restrictTo } from '../middlewares/auth.middleware';
 import {
@@ -330,6 +331,9 @@ router.patch('/change-password', protect, UserController.changePassword);
 router.post('/block', protect, BlockController.block);
 router.post('/unblock', protect, BlockController.unblock);
 router.get('/blocked', protect, BlockController.getBlocked);
+router.post('/mute', protect, MuteController.mute);
+router.post('/unmute', protect, MuteController.unmute);
+router.get('/muted', protect, MuteController.list);
 
 /**
  * @swagger

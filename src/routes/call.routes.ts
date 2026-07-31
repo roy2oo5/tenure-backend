@@ -15,5 +15,6 @@ router.use(protect);
 // Step A: Access Token Endpoint for clients
 router.get('/token', CallController.getTwilioToken);
 router.get('/history', CallController.getHistory);
+router.get('/limit/:mateUserId', CallController.getLimit);
 
 export default router;

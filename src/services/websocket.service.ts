@@ -1,11 +1,13 @@
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { CallStatus } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import url from 'url';
 import { env } from '../config/env';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import { sendPushNotification } from '../config/firebase';
+import { CallService } from './call.service';
 
 // Store active chat connections: map of userId -> open chat sockets
 const connections = new Map<number, Set<WebSocket>>();
@@ -79,6 +81,18 @@ export function initWebSocket(server: HttpServer) {
 
             if (data.type === 'ping') {
               ws.send(JSON.stringify({ type: 'pong' }));
+              return;
+            }
+
+            if (typeof data.type === 'string' && (
+              data.type === 'incoming_call' ||
+              data.type === 'call_accepted' ||
+              data.type === 'call_rejected' ||
+              data.type === 'call_cancelled' ||
+              data.type === 'call_ended' ||
+              data.type === 'webrtc_signal'
+            )) {
+              await handleGlobalCallMessage(ws, userId, data);
               return;
             }
           } catch (e) {
@@ -236,6 +250,24 @@ export function initWebSocket(server: HttpServer) {
 
           if (!recipientIsActiveInChat) {
             try {
+              const muted = await prisma.mute.findUnique({
+                where: {
+                  muterId_mutedUserId: {
+                    muterId: receiverId,
+                    mutedUserId: userId,
+                  },
+                },
+                select: { id: true },
+              });
+              if (muted) {
+                // Muted conversations still receive messages, but never alert
+                // the recipient while they are outside the chat.
+                ws.send(JSON.stringify({
+                  event: 'ack',
+                  message: { ...formattedMessage, sender: 'me' },
+                }));
+                return;
+              }
               const recipientUser = await prisma.user.findUnique({
                 where: { id: receiverId },
                 select: { fcmToken: true },
@@ -352,4 +384,214 @@ export function sendGlobalToAll(data: any): number {
     }
   }
   return sent;
+}
+
+async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any): Promise<void> {
+  const targetId = parseUserId(data.targetId);
+  if (!targetId || targetId === userId) {
+    ws.send(JSON.stringify({ event: 'call_rejected', reason: 'invalid_target' }));
+    return;
+  }
+
+  const targetUser = await prisma.user.findUnique({
+    where: { id: targetId },
+    select: { id: true, fcmToken: true },
+  });
+  if (!targetUser) {
+    ws.send(JSON.stringify({ event: 'call_rejected', reason: 'not_found' }));
+    return;
+  }
+
+  const block = await prisma.block.findFirst({
+    where: {
+      OR: [
+        { blockerId: userId, blockedId: targetId },
+        { blockerId: targetId, blockedId: userId },
+      ],
+    },
+  });
+  if (block) {
+    ws.send(JSON.stringify({ event: 'call_rejected', reason: 'blocked' }));
+    return;
+  }
+
+  if (data.type === 'incoming_call') {
+    const usage = await CallService.getDailyPairUsage(userId, targetId);
+    if (usage.remainingSeconds <= 0) {
+      ws.send(JSON.stringify({
+        event: 'call_rejected',
+        reason: 'daily_limit_exceeded',
+        limitSeconds: usage.limitSeconds,
+        usedSeconds: usage.usedSeconds,
+        remainingSeconds: 0,
+        resetAt: usage.resetAt,
+      }));
+      return;
+    }
+
+    const callerProfile = await prisma.profile.findUnique({
+      where: { userId },
+      select: { fullName: true, profilePhoto: true },
+    });
+    const callerUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    const call = await prisma.call.create({
+      data: {
+        callerId: userId,
+        receiverId: targetId,
+        status: CallStatus.RINGING,
+      },
+    });
+    const incomingPayload = {
+      event: 'incoming_call',
+      callId: call.id,
+      callerId: userId,
+      callerName: callerProfile?.fullName || callerUser?.name || 'Unknown',
+      callerAvatar: callerProfile?.profilePhoto || null,
+      requestId: data.requestId != null ? String(data.requestId) : undefined,
+      limitSeconds: usage.limitSeconds,
+      usedSeconds: usage.usedSeconds,
+      remainingSeconds: usage.remainingSeconds,
+      resetAt: usage.resetAt,
+    };
+    const delivered = sendGlobalToUser(targetId, incomingPayload);
+    ws.send(JSON.stringify({
+      event: 'call_initiated',
+      callId: call.id,
+      receiverId: targetId,
+      delivered,
+      limitSeconds: usage.limitSeconds,
+      usedSeconds: usage.usedSeconds,
+      remainingSeconds: usage.remainingSeconds,
+      resetAt: usage.resetAt,
+    }));
+
+    if (!delivered) {
+      await prisma.call.update({
+        where: { id: call.id },
+        data: { status: CallStatus.MISSED, endedAt: new Date() },
+      });
+      ws.send(JSON.stringify({ event: 'call_rejected', callId: call.id, reason: 'offline' }));
+      if (targetUser.fcmToken) {
+        sendPushNotification(targetUser.fcmToken, 'Incoming call', `${incomingPayload.callerName} is calling you`, {
+          kind: 'call_incoming',
+          callId: String(call.id),
+          callerId: String(userId),
+        }).catch((err) => logger.error('Error sending incoming call push notification:', err));
+      }
+    }
+    return;
+  }
+
+  const callId = parseUserId(data.callId);
+  if (!callId) {
+    ws.send(JSON.stringify({ event: 'call_rejected', reason: 'invalid_call' }));
+    return;
+  }
+
+  const call = await prisma.call.findUnique({ where: { id: callId } });
+  if (!call || (call.callerId !== userId && call.receiverId !== userId)) {
+    ws.send(JSON.stringify({ event: 'call_rejected', callId, reason: 'invalid_call' }));
+    return;
+  }
+
+  const payload = {
+    event: data.type,
+    callId,
+    fromUserId: userId,
+    signal: data.signal,
+    reason: data.reason,
+  };
+
+  if (data.type === 'call_accepted') {
+    const usage = await CallService.getDailyPairUsage(userId, targetId);
+    if (usage.remainingSeconds <= 0) {
+      ws.send(JSON.stringify({
+        event: 'call_rejected',
+        callId,
+        reason: 'daily_limit_exceeded',
+        limitSeconds: usage.limitSeconds,
+        usedSeconds: usage.usedSeconds,
+        remainingSeconds: 0,
+        resetAt: usage.resetAt,
+      }));
+      sendGlobalToUser(targetId, {
+        event: 'call_rejected',
+        callId,
+        reason: 'daily_limit_exceeded',
+        limitSeconds: usage.limitSeconds,
+        usedSeconds: usage.usedSeconds,
+        remainingSeconds: 0,
+        resetAt: usage.resetAt,
+      });
+      await prisma.call.update({
+        where: { id: callId },
+        data: { status: CallStatus.MISSED, endedAt: new Date() },
+      });
+      return;
+    }
+
+    await prisma.call.update({
+      where: { id: callId },
+      data: { status: CallStatus.ONGOING, startedAt: new Date() },
+    });
+    sendGlobalToUser(targetId, {
+      ...payload,
+      limitSeconds: usage.limitSeconds,
+      usedSeconds: usage.usedSeconds,
+      remainingSeconds: usage.remainingSeconds,
+      resetAt: usage.resetAt,
+    });
+    ws.send(JSON.stringify({
+      event: 'call_limit_started',
+      callId,
+      limitSeconds: usage.limitSeconds,
+      usedSeconds: usage.usedSeconds,
+      remainingSeconds: usage.remainingSeconds,
+      resetAt: usage.resetAt,
+    }));
+    sendGlobalToUser(targetId, {
+      event: 'call_limit_started',
+      callId,
+      limitSeconds: usage.limitSeconds,
+      usedSeconds: usage.usedSeconds,
+      remainingSeconds: usage.remainingSeconds,
+      resetAt: usage.resetAt,
+    });
+  } else if (data.type === 'call_rejected') {
+    sendGlobalToUser(targetId, payload);
+    await prisma.call.update({
+      where: { id: callId },
+      data: { status: CallStatus.REJECTED, endedAt: new Date() },
+    });
+  } else if (data.type === 'call_cancelled') {
+    sendGlobalToUser(targetId, payload);
+    await prisma.call.update({
+      where: { id: callId },
+      data: { status: CallStatus.MISSED, endedAt: new Date() },
+    });
+  } else if (data.type === 'call_ended') {
+    sendGlobalToUser(targetId, payload);
+    const now = new Date();
+    const duration = call.startedAt
+      ? Math.max(0, Math.floor((now.getTime() - call.startedAt.getTime()) / 1000))
+      : 0;
+    await prisma.call.update({
+      where: { id: callId },
+      data: { status: CallStatus.COMPLETED, endedAt: now, duration },
+    });
+  } else {
+    sendGlobalToUser(targetId, payload);
+  }
+}
+
+function parseUserId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
 }

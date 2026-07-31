@@ -1,4 +1,9 @@
-import { GetObjectCommand, S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  GetObjectCommand,
+  ListObjectsV2Command,
+  S3Client,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import path from 'path';
 import fs from 'fs';
 import { Readable } from 'stream';
@@ -36,6 +41,29 @@ if (hasS3Config) {
 }
 
 export class UploadService {
+  public static async listAvatars(reqHost?: string, reqProtocol?: string): Promise<string[]> {
+    if (!s3Client || !process.env.AWS_S3_BUCKET) {
+      throw new AppError('Avatar library is unavailable', 503);
+    }
+
+    const response = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: process.env.AWS_S3_BUCKET,
+        Prefix: 'avatars/',
+        MaxKeys: 100,
+      }),
+    );
+    const keys = (response.Contents ?? [])
+      .map((item) => item.Key)
+      .filter((key): key is string => Boolean(key) && UploadService.isImageKey(key!))
+      .sort((a, b) => a.localeCompare(b));
+
+    return keys.map((key) => {
+      const path = `/api/upload/media/${encodeURIComponent(key)}`;
+      return reqHost && reqProtocol ? `${reqProtocol}://${reqHost}${path}` : path;
+    });
+  }
+
   /**
    * Upload a file to AWS S3 (or fallback to local disk)
    * Returns the public URL of the uploaded file
@@ -157,7 +185,9 @@ export class UploadService {
     if (
       normalized.startsWith('../') ||
       normalized.includes('/../') ||
-      !['gallery/', 'profiles/', 'uploads/'].some((prefix) => normalized.startsWith(prefix))
+      !['avatars/', 'gallery/', 'profiles/', 'uploads/'].some((prefix) =>
+        normalized.startsWith(prefix),
+      )
     ) {
       throw new AppError('Invalid uploaded file path', 400);
     }
@@ -176,5 +206,9 @@ export class UploadService {
     if (lower.endsWith('.ogg')) return 'audio/ogg';
     if (lower.endsWith('.webm')) return 'audio/webm';
     return 'image/jpeg';
+  }
+
+  private static isImageKey(key: string): boolean {
+    return /\.(avif|gif|jpe?g|png|webp)$/i.test(key);
   }
 }

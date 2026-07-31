@@ -304,7 +304,9 @@ function toDiscoverMate(
 ): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
   const gallery = profile.gallery ?? [];
-  const livePhotoAdded = gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
+  const livePhotoAdded =
+    Boolean(profile.livePhotoUrl?.trim()) ||
+    gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
   const activeSessionStatus = activeSessionByUserId.get(profile.userId) ?? null;
   return {
     userId: profile.userId,
@@ -413,6 +415,7 @@ export class DiscoverService {
     );
 
     const where: Prisma.ProfileWhereInput = {
+      isMinor: false,
       userId: {
         notIn: [currentUserId, ...blockedUserIds],
       },
@@ -445,8 +448,13 @@ export class DiscoverService {
       filteredProfiles.map((profile) => profile.userId),
     );
 
-    return filteredProfiles.map((profile) =>
+    const results = filteredProfiles.map((profile) =>
       toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    );
+    return results.sort(
+      (a, b) =>
+        (a.distanceKm ?? Number.POSITIVE_INFINITY) -
+        (b.distanceKm ?? Number.POSITIVE_INFINITY),
     );
   }
 
@@ -507,6 +515,7 @@ export class DiscoverService {
     );
 
     const where: Prisma.ProfileWhereInput = {
+      isMinor: false,
       userId: {
         notIn: [currentUserId, ...blockedUserIds],
       },
@@ -539,8 +548,13 @@ export class DiscoverService {
       filteredProfiles.map((profile) => profile.userId),
     );
 
-    return filteredProfiles.map((profile) =>
+    const results = filteredProfiles.map((profile) =>
       toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    );
+    return results.sort(
+      (a, b) =>
+        (a.distanceKm ?? Number.POSITIVE_INFINITY) -
+        (b.distanceKm ?? Number.POSITIVE_INFINITY),
     );
   }
 

@@ -68,10 +68,13 @@ describe('RequestService', () => {
       ).rejects.toThrow('You cannot send a mate request to yourself');
     });
 
-    it('should reject support requests from users under 18', async () => {
-      (prisma.profile.findUnique as any).mockResolvedValue({
-        dob: new Date('2011-01-01'),
-        isMinor: true,
+    it('should reject support requests sent to users under 18', async () => {
+      (prisma.user.findUnique as any).mockResolvedValue({
+        id: 2,
+        profile: {
+          dob: new Date('2011-01-01'),
+          isMinor: true,
+        },
       });
 
       await expect(
@@ -82,9 +85,9 @@ describe('RequestService', () => {
           meetLocation: 'Library',
           fromDateTime: new Date(),
         }),
-      ).rejects.toThrow('Users under 18 can get support from other users but cannot send support requests');
+      ).rejects.toThrow('Users under 18 cannot provide support or receive support requests');
 
-      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+      expect(prisma.user.findUnique).toHaveBeenCalled();
       expect(prisma.request.create).not.toHaveBeenCalled();
     });
 

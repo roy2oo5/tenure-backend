@@ -5,6 +5,27 @@ import { AppError } from '../utils/app-error';
 import { env } from '../config/env';
 
 export class CallController {
+  public static async getLimit(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+
+      const mateUserId = Number.parseInt(req.params.mateUserId, 10);
+      if (!Number.isInteger(mateUserId) || mateUserId <= 0) {
+        return next(new AppError('Invalid mate user ID.', 400));
+      }
+
+      const usage = await CallService.getDailyPairUsage(req.user.id, mateUserId);
+      res.status(200).json({
+        status: 'success',
+        data: usage,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async getHistory(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) {
