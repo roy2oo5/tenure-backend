@@ -2,6 +2,16 @@ import zlib from 'zlib';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import {
+  RGBLuminanceSource,
+  HybridBinarizer,
+  BinaryBitmap,
+  MultiFormatReader,
+  DecodeHintType,
+  BarcodeFormat,
+} from '@zxing/library';
+import { PNG } from 'pngjs';
+import jpeg from 'jpeg-js';
 
 /**
  * Demographic information extracted from UIDAI Aadhaar Secure QR Code.
@@ -341,9 +351,74 @@ export function getUidaiPublicKeyPem(): string | undefined {
 }
 
 /**
+ * Extract raw QR payload bytes from full Aadhaar card photo (PNG / JPEG image file).
+ * Uses ZXing library and image decoders to locate and scan the QR code within the card photo.
+ */
+export function extractQrBytesFromImageBuffer(imageBuffer: Buffer): Buffer {
+  if (!imageBuffer || imageBuffer.length < 4) return imageBuffer;
+
+  const isPng =
+    imageBuffer[0] === 0x89 &&
+    imageBuffer[1] === 0x50 &&
+    imageBuffer[2] === 0x4e &&
+    imageBuffer[3] === 0x47;
+  const isJpeg = imageBuffer[0] === 0xff && imageBuffer[1] === 0xd8;
+
+  if (!isPng && !isJpeg) {
+    return imageBuffer;
+  }
+
+  let width = 0;
+  let height = 0;
+  let rgbaData: Uint8Array | Buffer;
+
+  try {
+    if (isPng) {
+      const png = PNG.sync.read(imageBuffer);
+      width = png.width;
+      height = png.height;
+      rgbaData = png.data;
+    } else {
+      const decoded = jpeg.decode(imageBuffer, { tolerantDecoding: true });
+      width = decoded.width;
+      height = decoded.height;
+      rgbaData = decoded.data;
+    }
+
+    const len = width * height;
+    const luminanceL = new Uint8ClampedArray(len);
+    for (let i = 0; i < len; i++) {
+      const r = rgbaData[i * 4];
+      const g = rgbaData[i * 4 + 1];
+      const b = rgbaData[i * 4 + 2];
+      luminanceL[i] = Math.round((r * 299 + g * 587 + b * 114) / 1000);
+    }
+
+    const luminanceSource = new RGBLuminanceSource(luminanceL, width, height);
+    const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
+    hints.set(DecodeHintType.TRY_HARDER, true);
+
+    const reader = new MultiFormatReader();
+    reader.setHints(hints);
+
+    const result = reader.decode(binaryBitmap);
+    if (result && result.getRawBytes() && result.getRawBytes().length > 0) {
+      return Buffer.from(result.getRawBytes());
+    }
+  } catch (err) {
+    // If ZXing fails to decode image, return original imageBuffer for zlib fallback
+  }
+
+  return imageBuffer;
+}
+
+/**
  * Master orchestration function to decompress, parse, and verify UIDAI Aadhaar Secure QR Code.
  *
- * @param rawQrBytes Compressed binary buffer from QR code byte payload
+ * @param rawQrBytes Compressed binary buffer from QR code byte payload or image file buffer
  * @param uidaiPublicKeyPem UIDAI RSA public key in PEM format (optional, defaults to env or uidai_auth_prod_2028.cer)
  * @returns Object indicating validity, parsed demographics data, and optional error message
  */
@@ -352,8 +427,11 @@ export function processAadhaarSecureQR(
   uidaiPublicKeyPem?: string
 ): ProcessAadhaarResult {
   try {
+    // Step 0: Extract raw QR payload bytes from image file (PNG/JPEG photo of Aadhaar Card) if applicable
+    const targetPayloadBytes = extractQrBytesFromImageBuffer(rawQrBytes);
+
     // Step 1: Decompress raw QR byte stream
-    const decompressedBuffer = decompressQrPayload(rawQrBytes);
+    const decompressedBuffer = decompressQrPayload(targetPayloadBytes);
 
     // Step 2: Parse buffer into demographic fields & signature
     const parsed = parseAadhaarBuffer(decompressedBuffer);
