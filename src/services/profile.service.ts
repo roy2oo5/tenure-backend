@@ -100,16 +100,6 @@ function normalizeCategoryRates(
   return Object.fromEntries(entries);
 }
 
-function ageFromDob(dob: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const monthDiff = today.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
-}
-
 function maskAadhaar(aadhaarNumber: string): string {
   const digits = aadhaarNumber.replace(/\D/g, '');
   return digits.length >= 4 ? `XXXX XXXX ${digits.slice(-4)}` : 'XXXX XXXX XXXX';
@@ -152,11 +142,10 @@ export class ProfileService {
       },
     });
 
-    const isMinor = ageFromDob(data.dob) < 18;
-    const instantAvailable = isMinor
-      ? false
-      :
-      data.instantAvailable !== undefined
+    // Every admitted user (age 16+) receives the full application experience.
+    // Keep the field false for compatibility with the existing database schema.
+    const isMinor = false;
+    const instantAvailable = data.instantAvailable !== undefined
         ? data.instantAvailable
         : (existingProfile?.instantAvailable ?? false);
     const instantAvailableUntil =
@@ -213,15 +202,11 @@ export class ProfileService {
       latitude: data.latitude ?? null,
       longitude: data.longitude ?? null,
       languages: data.languages,
-      categories: isMinor ? [] : (data.categories ?? []),
-      hourlyRate: isMinor
-        ? null
-        : data.hourlyRate !== undefined
+      categories: data.categories ?? [],
+      hourlyRate: data.hourlyRate !== undefined
           ? data.hourlyRate
           : null,
-      categoryRates: isMinor
-        ? {}
-        : normalizeCategoryRates(data.categories ?? [], data.categoryRates),
+      categoryRates: normalizeCategoryRates(data.categories ?? [], data.categoryRates),
       about: data.about ?? null,
       vibes: data.vibes ?? [],
       professions: data.professions ?? [],

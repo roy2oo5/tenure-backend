@@ -11,13 +11,30 @@ export class NotificationService {
   public static async createNotification(
     userId: number,
     kind: string,
-    message: string
+    message: string,
+    actorUserId?: number,
   ): Promise<Notification> {
+    const actor = actorUserId
+      ? await prisma.user.findUnique({
+          where: { id: actorUserId },
+          select: {
+            tenureId: true,
+            name: true,
+            profile: { select: { fullName: true } },
+          },
+        })
+      : null;
     const notification = await prisma.notification.create({
       data: {
         userId,
         kind,
         message,
+        ...(actor
+          ? {
+              actorName: actor.profile?.fullName ?? actor.name ?? 'TenureMate user',
+              actorTenureId: actor.tenureId ?? null,
+            }
+          : {}),
       },
     });
 

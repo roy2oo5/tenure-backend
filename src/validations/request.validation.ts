@@ -36,6 +36,13 @@ export const createRequestSchema = z.object({
           .optional()
           .nullable(),
       ),
+      timezoneOffsetMinutes: z
+        .number()
+        .int('Timezone offset must be a whole number of minutes')
+        .min(-840)
+        .max(840)
+        .optional()
+        .default(0),
       instantBooking: z.boolean().optional().default(false),
       responseTime: z
         .number()
@@ -65,6 +72,13 @@ export const createRequestSchema = z.object({
       readyToPayTip: z.boolean().optional().default(false),
     })
     .superRefine((body, ctx) => {
+      if (body.toDateTime && body.toDateTime <= body.fromDateTime) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['toDateTime'],
+          message: 'End date/time must be after start date/time',
+        });
+      }
       if (
         body.instantBooking &&
         (body.responseTime === undefined || ![10, 20, 30].includes(body.responseTime))

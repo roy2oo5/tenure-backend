@@ -68,29 +68,6 @@ describe('RequestService', () => {
       ).rejects.toThrow('You cannot send a mate request to yourself');
     });
 
-    it('should reject support requests sent to users under 18', async () => {
-      (prisma.user.findUnique as any).mockResolvedValue({
-        id: 2,
-        profile: {
-          dob: new Date('2011-01-01'),
-          isMinor: true,
-        },
-      });
-
-      await expect(
-        RequestService.createRequest(1, {
-          receiverId: 2,
-          categoryId: 'study',
-          categoryLabel: 'Study Partner',
-          meetLocation: 'Library',
-          fromDateTime: new Date(),
-        }),
-      ).rejects.toThrow('Users under 18 cannot provide support or receive support requests');
-
-      expect(prisma.user.findUnique).toHaveBeenCalled();
-      expect(prisma.request.create).not.toHaveBeenCalled();
-    });
-
     it('should throw an error if receiver user does not exist', async () => {
       (prisma.user.findUnique as any).mockResolvedValue(null);
 
@@ -412,6 +389,60 @@ describe('RequestService', () => {
         }),
       ).rejects.toThrow('Scheduled requests must start at least 15 minutes from now');
 
+      expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject a request on a weekday outside the receiver availability', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T00:00:00.000Z'));
+      (prisma.user.findUnique as any).mockResolvedValue({
+        id: 2,
+        profile: {
+          fullName: 'Available User',
+          availableDays: ['MON', 'THU', 'FRI'],
+          availableTimeRange: '10:00 AM - 5:00 PM',
+        },
+      });
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'hospital',
+          categoryLabel: 'Hospital support',
+          meetLocation: 'Clinic',
+          // Sunday 3:00 PM to 5:00 PM in India.
+          fromDateTime: new Date('2027-06-27T09:30:00.000Z'),
+          toDateTime: new Date('2027-06-27T11:30:00.000Z'),
+          timezoneOffsetMinutes: 330,
+        }),
+      ).rejects.toThrow('Please choose a meeting time within this companion availability');
+      expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject a request outside the receiver hours in the selected timezone', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T00:00:00.000Z'));
+      (prisma.user.findUnique as any).mockResolvedValue({
+        id: 2,
+        profile: {
+          fullName: 'Available User',
+          availableDays: ['MON', 'THU', 'FRI'],
+          availableTimeRange: '10:00 AM - 5:00 PM',
+        },
+      });
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'hospital',
+          categoryLabel: 'Hospital support',
+          meetLocation: 'Clinic',
+          // Thursday 6:00 PM to 7:00 PM in India.
+          fromDateTime: new Date('2027-06-24T12:30:00.000Z'),
+          toDateTime: new Date('2027-06-24T13:30:00.000Z'),
+          timezoneOffsetMinutes: 330,
+        }),
+      ).rejects.toThrow('Please choose a meeting time within this companion availability');
       expect(prisma.request.create).not.toHaveBeenCalled();
     });
   });

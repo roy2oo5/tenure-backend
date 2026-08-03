@@ -410,12 +410,14 @@ export class SessionService {
       await NotificationService.createNotification(
         updated.senderId,
         'payment_sent',
-        `you paid ${mappedSender.billingAmount} to ${mappedSender.mateName}`
+        `you paid ${mappedSender.billingAmount} to ${mappedSender.mateName}`,
+        updated.receiverId,
       );
       await NotificationService.createNotification(
         updated.receiverId,
         'payment_received',
-        `you received ${mappedReceiver.billingAmount} from ${mappedReceiver.mateName}`
+        `you received ${mappedReceiver.billingAmount} from ${mappedReceiver.mateName}`,
+        updated.senderId,
       );
     } catch (notifErr: any) {
       console.error('Failed to create session billing notifications:', notifErr.message);

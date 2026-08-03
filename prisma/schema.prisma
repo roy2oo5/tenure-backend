@@ -200,13 +200,15 @@ model Session {
 }
 
 model Notification {
-  id        Int      @id @default(autoincrement())
-  userId    Int      @map("user_id")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind      String   @map("kind")
-  message   String   @map("message")
-  read      Boolean  @default(false) @map("read")
-  createdAt DateTime @default(now()) @map("created_at")
+  id            Int      @id @default(autoincrement())
+  userId        Int      @map("user_id")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind          String   @map("kind")
+  message       String   @map("message")
+  actorName     String?  @map("actor_name")
+  actorTenureId String?  @map("actor_tenure_id")
+  read          Boolean  @default(false) @map("read")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   @@map("notifications")
 }

@@ -12,6 +12,9 @@ vi.mock('@/config/database', () => ({
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    user: {
+      findUnique: vi.fn(),
+    },
   },
 }));
 
@@ -47,6 +50,34 @@ describe('NotificationService', () => {
         },
       });
       expect(result).toEqual(mockNotif);
+    });
+
+    it('should store the acting user name and Tenure ID', async () => {
+      (prisma.user.findUnique as any)
+        .mockResolvedValueOnce({
+          tenureId: 'TM12345',
+          name: 'Account Name',
+          profile: { fullName: 'Asha Rao' },
+        })
+        .mockResolvedValueOnce({ fcmToken: null });
+      (prisma.notification.create as any).mockResolvedValue({ id: 1002 });
+
+      await NotificationService.createNotification(
+        123,
+        'new_request',
+        'Asha Rao sent you a new booking request.',
+        456,
+      );
+
+      expect(prisma.notification.create).toHaveBeenCalledWith({
+        data: {
+          userId: 123,
+          kind: 'new_request',
+          message: 'Asha Rao sent you a new booking request.',
+          actorName: 'Asha Rao',
+          actorTenureId: 'TM12345',
+        },
+      });
     });
   });
 

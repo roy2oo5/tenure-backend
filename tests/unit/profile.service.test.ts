@@ -206,13 +206,13 @@ describe('ProfileService', () => {
       );
     });
 
-    it('should mark 15 to 17 year old profiles as minors', async () => {
+    it('should give a 16 year old the full standard profile capabilities', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
 
       const mockProfileData = {
         fullName: 'Young User',
-        dob: new Date('2010-06-20'),
+        dob: new Date('2011-06-20'),
         gender: 'female',
         country: 'India',
         state: 'Karnataka',
@@ -220,14 +220,15 @@ describe('ProfileService', () => {
         pinCode: '560001',
         languages: ['English'],
         categories: ['Open to any'],
-        hourlyRate: 0,
+        hourlyRate: 100,
+        instantAvailable: true,
       };
 
       const mockResponse = {
         id: 2002,
         userId: 123,
         ...mockProfileData,
-        isMinor: true,
+        isMinor: false,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -241,18 +242,16 @@ describe('ProfileService', () => {
       expect(prisma.profile.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           update: expect.objectContaining({
-            isMinor: true,
-            categories: [],
-            hourlyRate: null,
-            categoryRates: {},
-            instantAvailable: false,
+            isMinor: false,
+            categories: ['Open to any'],
+            hourlyRate: 100,
+            instantAvailable: true,
           }),
           create: expect.objectContaining({
-            isMinor: true,
-            categories: [],
-            hourlyRate: null,
-            categoryRates: {},
-            instantAvailable: false,
+            isMinor: false,
+            categories: ['Open to any'],
+            hourlyRate: 100,
+            instantAvailable: true,
           }),
         }),
       );

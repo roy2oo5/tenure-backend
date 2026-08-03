@@ -14,6 +14,8 @@ export type CreateRequestInput = {
   meetLocationLongitude?: number | null;
   fromDateTime: Date;
   toDateTime?: Date | null;
+  /** Client local time minus UTC, in minutes (for example India is 330). */
+  timezoneOffsetMinutes?: number;
   instantBooking?: boolean;
   responseTime?: number | null;
   responseDeadlineAt?: Date | null;
@@ -287,16 +289,6 @@ const hasUserProvidedEmail = (email?: string | null): boolean => {
   return Boolean(normalized && !/^phone_\d+@tenure\.app$/.test(normalized));
 };
 
-const ageFromDob = (dob: Date): number => {
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const monthDiff = today.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
-};
-
 const profileFields = (
   user: {
     phone?: string | null;
@@ -436,7 +428,16 @@ const parseAvailabilityRange = (value?: string | null): { start: number; end: nu
   return { start, end };
 };
 
-const minutesInDay = (date: Date): number => date.getHours() * 60 + date.getMinutes();
+const localDateParts = (date: Date, timezoneOffsetMinutes: number) => {
+  const shifted = new Date(date.getTime() + timezoneOffsetMinutes * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    date: shifted.getUTCDate(),
+    day: shifted.getUTCDay(),
+    minutes: shifted.getUTCHours() * 60 + shifted.getUTCMinutes(),
+  };
+};
 
 const minimumScheduledStart = (): Date => {
   const now = new Date();
@@ -456,6 +457,7 @@ const requestFitsAvailability = (
   profile: Pick<Profile, 'availableDays' | 'availableTimeRange'> | null | undefined,
   from: Date,
   to?: Date | null,
+  timezoneOffsetMinutes = 0,
 ): boolean => {
   if (!profile) {
     return true;
@@ -469,11 +471,19 @@ const requestFitsAvailability = (
 
   const effectiveTo = to ?? from;
 
-  if (from.toDateString() !== effectiveTo.toDateString()) {
+  const fromLocal = localDateParts(from, timezoneOffsetMinutes);
+  const toLocal = localDateParts(effectiveTo, timezoneOffsetMinutes);
+
+  // Weekday is the first availability gate for recurring weekly schedules.
+  if (days.length && !days.includes(DAY_KEYS[fromLocal.day])) {
     return false;
   }
 
-  if (days.length && !days.includes(DAY_KEYS[from.getDay()])) {
+  if (
+    fromLocal.year !== toLocal.year ||
+    fromLocal.month !== toLocal.month ||
+    fromLocal.date !== toLocal.date
+  ) {
     return false;
   }
 
@@ -481,8 +491,8 @@ const requestFitsAvailability = (
     return true;
   }
 
-  const start = minutesInDay(from);
-  const end = minutesInDay(effectiveTo);
+  const start = fromLocal.minutes;
+  const end = toLocal.minutes;
 
   if (range.end > range.start) {
     return start >= range.start && end <= range.end;
@@ -570,13 +580,6 @@ export class RequestService {
     if (!receiver) {
       throw new AppError('The target companion user does not exist', 404);
     }
-    if (
-      receiver.profile?.isMinor ||
-      (receiver.profile?.dob && ageFromDob(receiver.profile.dob) < 18)
-    ) {
-      throw new AppError('Users under 18 cannot provide support or receive support requests.', 403);
-    }
-
     const isBlocked = await prisma.block.findFirst({
       where: {
         OR: [
@@ -619,7 +622,12 @@ export class RequestService {
 
     if (
       !instantBooking &&
-      !requestFitsAvailability(receiver.profile, data.fromDateTime, data.toDateTime)
+      !requestFitsAvailability(
+        receiver.profile,
+        data.fromDateTime,
+        data.toDateTime,
+        data.timezoneOffsetMinutes,
+      )
     ) {
       throw new AppError('Please choose a meeting time within this companion availability', 400);
     }
@@ -718,6 +726,7 @@ export class RequestService {
         data.receiverId,
         'new_request',
         `${senderName} sent you a new booking request.`,
+        senderId,
       );
     } catch (notifErr: any) {
       console.error('Failed to create new request notification:', notifErr.message);
@@ -967,12 +976,14 @@ export class RequestService {
         updatedRequest.senderId,
         'request_accepted',
         `${receiverName} accepted your request. Please confirm to generate the OTP.`,
+        updatedRequest.receiverId,
       );
     } else if (status === 'confirmed') {
       await NotificationService.createNotification(
         updatedRequest.receiverId,
         'request_accepted',
         `${senderName} confirmed the request. OTP is ready.`,
+        updatedRequest.senderId,
       );
     } else if (status === 'cancelled') {
       const reasonText = normalizedCancellationReason
@@ -982,17 +993,20 @@ export class RequestService {
         updatedRequest.receiverId,
         'meet_canceled',
         `${senderName} cancelled your meet${reasonText}`,
+        updatedRequest.senderId,
       );
       if (cancellationFee > 0) {
         await NotificationService.createNotification(
           updatedRequest.senderId,
           'payment_sent',
           `you paid ${cancellationFee} late cancellation fee to ${receiverName}`,
+          updatedRequest.receiverId,
         );
         await NotificationService.createNotification(
           updatedRequest.receiverId,
           'payment_received',
           `you received ${cancellationFee} late cancellation fee from ${senderName}`,
+          updatedRequest.senderId,
         );
       }
     } else if (status === 'declined') {
@@ -1000,6 +1014,7 @@ export class RequestService {
         updatedRequest.senderId,
         'meet_canceled',
         `${receiverName} declined your request`,
+        updatedRequest.receiverId,
       );
     }
 
