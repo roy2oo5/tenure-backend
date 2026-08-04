@@ -25,6 +25,100 @@ async function profileWithTenureId(userId: number, profile: object) {
 }
 
 export class ProfileController {
+  public static async getSavedAddresses(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const addresses = await prisma.savedAddress.findMany({
+        where: { userId: req.user.id },
+        orderBy: [{ isSelected: 'desc' }, { updatedAt: 'desc' }],
+      });
+      res.status(200).json({ status: 'success', data: { addresses } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async saveAddress(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const label = req.body.label?.toString().trim() ?? '';
+      const latitude = Number(req.body.latitude);
+      const longitude = Number(req.body.longitude);
+      if (!label || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return next(new AppError('A valid address and coordinates are required.', 400));
+      }
+      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return next(new AppError('Address coordinates are invalid.', 400));
+      }
+      const address = await prisma.savedAddress.create({
+        data: { userId: req.user.id, label, latitude, longitude },
+      });
+      res.status(201).json({ status: 'success', data: { address } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async selectSavedAddress(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const addressId = Number(req.params.addressId);
+      if (!Number.isInteger(addressId)) {
+        return next(new AppError('Saved address id is invalid.', 400));
+      }
+      const address = await prisma.savedAddress.findFirst({
+        where: { id: addressId, userId: req.user.id },
+      });
+      if (!address) return next(new AppError('Saved address not found.', 404));
+      await prisma.$transaction([
+        prisma.savedAddress.updateMany({
+          where: { userId: req.user.id, isSelected: true },
+          data: { isSelected: false },
+        }),
+        prisma.savedAddress.update({
+          where: { id: addressId },
+          data: { isSelected: true },
+        }),
+      ]);
+      res.status(200).json({
+        status: 'success',
+        data: { address: { ...address, isSelected: true } },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async clearSelectedAddress(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      await prisma.savedAddress.updateMany({
+        where: { userId: req.user.id, isSelected: true },
+        data: { isSelected: false },
+      });
+      res.status(200).json({ status: 'success', data: {} });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+
   /**
    * Upsert the current user's profile
    */

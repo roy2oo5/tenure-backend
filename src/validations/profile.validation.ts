@@ -3,12 +3,7 @@ import { z } from 'zod';
 const stringArray = z.array(z.string().min(1)).optional().nullable();
 const MAX_HOURLY_RATE = 1199;
 const MIN_PROFILE_AGE = 16;
-const MAX_ABOUT_WORDS = 50;
-
-const wordCount = (value: string): number => {
-  const normalized = value.trim();
-  return normalized ? normalized.split(/\s+/).length : 0;
-};
+const MAX_ABOUT_CHARACTERS = 50;
 const nullableNumber = (schema: z.ZodNumber) =>
   z.preprocess((arg) => {
     if (arg === null || arg === undefined || arg === '') {
@@ -78,9 +73,9 @@ export const createProfileSchema = z.object({
       .nullable(),
     about: z
       .string()
-      .refine(
-        (value) => wordCount(value) <= MAX_ABOUT_WORDS,
-        `About must be ${MAX_ABOUT_WORDS} words or fewer`,
+      .max(
+        MAX_ABOUT_CHARACTERS,
+        `About must be ${MAX_ABOUT_CHARACTERS} characters or fewer`,
       )
       .optional()
       .nullable(),

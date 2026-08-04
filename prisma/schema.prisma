@@ -38,6 +38,7 @@ model User {
   reportsReceived  Report[]       @relation("ReportedUser")
   callsSent        Call[]         @relation("CallsSent")
   callsReceived    Call[]         @relation("CallsReceived")
+  savedAddresses   SavedAddress[]
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 
@@ -237,6 +238,21 @@ model Block {
 
   @@unique([blockerId, blockedId])
   @@map("blocks")
+}
+
+model SavedAddress {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String
+  latitude   Float
+  longitude  Float
+  isSelected Boolean  @default(false) @map("is_selected")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, updatedAt])
+  @@map("saved_addresses")
 }
 
 model Mute {

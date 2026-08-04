@@ -451,6 +451,18 @@ router.get('/muted', protect, MuteController.list);
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
 router.patch('/profile/location', protect, ProfileController.updateLocation);
+router.get('/saved-addresses', protect, ProfileController.getSavedAddresses);
+router.post('/saved-addresses', protect, ProfileController.saveAddress);
+router.patch(
+  '/saved-addresses/selection/clear',
+  protect,
+  ProfileController.clearSelectedAddress,
+);
+router.patch(
+  '/saved-addresses/:addressId/select',
+  protect,
+  ProfileController.selectSavedAddress,
+);
 router.post(
   '/profile/aadhaar-verification',
   protect,
