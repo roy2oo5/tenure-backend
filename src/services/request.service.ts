@@ -1,9 +1,10 @@
 import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
-import { Profile, RequestStatus, SessionStatus } from '@prisma/client';
+import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
 import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
-import { getCategoryMatchVariants } from '../constants/mate-categories';
+import { randomInt } from 'crypto';
+import { otpProximityForRequest } from '../utils/otp-proximity';
 
 export type CreateRequestInput = {
   receiverId: number;
@@ -62,7 +63,7 @@ export type MappedRequest = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges: boolean;
   readyToPayTip: boolean;
-  requestHourlyRate: number;
+  requestHourlyRate: number | null;
   mateGender?: string | null;
   mateDob?: string | null;
   mateIsMinor: boolean;
@@ -73,6 +74,7 @@ export type MappedRequest = {
   mateLanguages: string[];
   mateAvailableDays: string[];
   mateAvailableTime?: string | null;
+  mateWeeklyAvailability?: Prisma.JsonValue | null;
   mateBestTime?: string | null;
   mateVehicles: string[];
   mateAbout?: string | null;
@@ -94,7 +96,11 @@ export type MappedRequest = {
   sentAt: string;
   sessionStatus?: string | null;
   sessionEndedAt?: string | null;
+  sessionElapsedSec?: number | null;
   otp?: string | null;
+  otpProximityReady?: boolean;
+  otpDistanceMeters?: number | null;
+  otpProximityMessage?: string;
   requesterGender?: string | null;
   cancellationFee: number;
   cancellationFeeReason?: string | null;
@@ -225,6 +231,8 @@ const mapSessionStatus = (session?: { status: SessionStatus } | null): string | 
       return 'paused';
     case SessionStatus.RESUME_REQUESTED:
       return 'resume_requested';
+    case SessionStatus.END_REQUESTED:
+      return 'end_requested';
     case SessionStatus.ENDED:
       return 'ended';
   }
@@ -250,31 +258,6 @@ const categoryRatesRecord = (value?: Profile['categoryRates'] | null): Record<st
       .map(([category, rate]) => [category, Number(rate)] as const)
       .filter(([category, rate]) => category.trim() && Number.isFinite(rate) && rate >= 0),
   );
-};
-
-const hourlyRateForRequest = (
-  profile: Profile | null | undefined,
-  categoryLabel?: string | null,
-): number => {
-  if (!profile) {
-    return 50;
-  }
-
-  const requestedCategory = categoryLabel?.trim().toLowerCase();
-  if (requestedCategory) {
-    const variants = new Set([
-      requestedCategory,
-      ...getCategoryMatchVariants(categoryLabel ?? '').map((value) => value.toLowerCase()),
-    ]);
-    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(([category]) =>
-      variants.has(category.trim().toLowerCase()),
-    );
-    if (matched) {
-      return matched[1];
-    }
-  }
-
-  return profile.hourlyRate ?? 50;
 };
 
 const profileLocation = (profile?: Profile | null): string | null => {
@@ -309,6 +292,7 @@ const profileFields = (
     mateLanguages: profile?.languages ?? [],
     mateAvailableDays: profile?.availableDays ?? [],
     mateAvailableTime: profile?.availableTimeRange ?? null,
+    mateWeeklyAvailability: profile?.weeklyAvailability ?? null,
     mateBestTime: profile?.bestTime ?? null,
     mateVehicles: profile?.vehicles ?? [],
     mateAbout: profile?.about ?? null,
@@ -374,9 +358,8 @@ const cancellationPreviewFields = (
   request: {
     status: RequestStatus;
     fromDateTime: Date;
-    categoryLabel: string;
+    quotedHourlyRate?: number | null;
   },
-  receiverProfile: Profile | null | undefined,
 ) => {
   const now = Date.now();
   const startsAt = request.fromDateTime.getTime();
@@ -388,7 +371,7 @@ const cancellationPreviewFields = (
   return {
     cancellationFeeApplies: applies,
     cancellationFeePreview: applies
-      ? hourlyRateForRequest(receiverProfile, request.categoryLabel)
+      ? (request.quotedHourlyRate ?? 0)
       : 0,
   };
 };
@@ -454,7 +437,7 @@ const minimumScheduledStart = (): Date => {
 };
 
 const requestFitsAvailability = (
-  profile: Pick<Profile, 'availableDays' | 'availableTimeRange'> | null | undefined,
+  profile: Pick<Profile, 'availableDays' | 'availableTimeRange' | 'weeklyAvailability'> | null | undefined,
   from: Date,
   to?: Date | null,
   timezoneOffsetMinutes = 0,
@@ -463,21 +446,35 @@ const requestFitsAvailability = (
     return true;
   }
 
-  const days = (profile.availableDays ?? []).map(normalizeDayKey).filter(Boolean);
-  const range = parseAvailabilityRange(profile.availableTimeRange);
-  if (!days.length && !range) {
-    return true;
-  }
-
+  const weekly =
+    profile.weeklyAvailability &&
+    typeof profile.weeklyAvailability === 'object' &&
+    !Array.isArray(profile.weeklyAvailability)
+      ? (profile.weeklyAvailability as Record<string, { start?: unknown; end?: unknown }>)
+      : null;
+  const weeklyDays = weekly ? Object.keys(weekly).map(normalizeDayKey).filter(Boolean) : [];
+  const days = weeklyDays.length
+    ? weeklyDays
+    : (profile.availableDays ?? []).map(normalizeDayKey).filter(Boolean);
   const effectiveTo = to ?? from;
 
   const fromLocal = localDateParts(from, timezoneOffsetMinutes);
   const toLocal = localDateParts(effectiveTo, timezoneOffsetMinutes);
+  const dayKey = DAY_KEYS[fromLocal.day];
+  const daySlot = weekly?.[dayKey];
+  const range = daySlot
+    ? parseAvailabilityRange(`${String(daySlot.start)} - ${String(daySlot.end)}`)
+    : parseAvailabilityRange(profile.availableTimeRange);
+  if (!days.length && !range) {
+    return true;
+  }
 
   // Weekday is the first availability gate for recurring weekly schedules.
-  if (days.length && !days.includes(DAY_KEYS[fromLocal.day])) {
+  if (days.length && !days.includes(dayKey)) {
     return false;
   }
+
+  if (weeklyDays.length && !daySlot) return false;
 
   if (
     fromLocal.year !== toLocal.year ||
@@ -570,6 +567,21 @@ export class RequestService {
   ): Promise<MappedRequest> {
     if (senderId === data.receiverId) {
       throw new AppError('You cannot send a mate request to yourself', 400);
+    }
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentRequestCount = await prisma.request.count({
+      where: {
+        senderId,
+        receiverId: data.receiverId,
+        createdAt: { gte: oneHourAgo },
+      },
+    });
+    if (recentRequestCount >= 5) {
+      throw new AppError(
+        'You can send up to 5 requests per hour to this supporter. Please try again later.',
+        429,
+      );
     }
 
     const receiver = await prisma.user.findUnique({
@@ -705,14 +717,14 @@ export class RequestService {
       ...beneficiaryFields(newRequest),
       readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
       readyToPayTip: newRequest.readyToPayTip,
-      requestHourlyRate: hourlyRateForRequest(receiver.profile, newRequest.categoryLabel),
+      requestHourlyRate: newRequest.quotedHourlyRate,
       ...profileFields(receiver),
       status: 'pending' as const,
       sentAt: formatSentAt(newRequest.createdAt),
       otp: null,
       requesterGender: null,
       ...cancellationFields(newRequest),
-      ...cancellationPreviewFields(newRequest, receiver.profile),
+      ...cancellationPreviewFields(newRequest),
     };
 
     try {
@@ -791,19 +803,17 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
-        requestHourlyRate: hourlyRateForRequest(req.receiver?.profile, req.categoryLabel),
+        requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
+        sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
         otp: null,
         requesterGender: null,
         ...cancellationFields(req),
-        ...cancellationPreviewFields(
-          { ...req, status: effectiveRequestStatus(req) },
-          req.receiver?.profile,
-        ),
+        ...cancellationPreviewFields({ ...req, status: effectiveRequestStatus(req) }),
       }),
     );
 
@@ -827,19 +837,17 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
-        requestHourlyRate: hourlyRateForRequest(req.receiver?.profile, req.categoryLabel),
+        requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
+        sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
         otp: req.otp,
         requesterGender: req.sender.profile?.gender ?? null,
         ...cancellationFields(req),
-        ...cancellationPreviewFields(
-          { ...req, status: effectiveRequestStatus(req) },
-          req.receiver?.profile,
-        ),
+        ...cancellationPreviewFields({ ...req, status: effectiveRequestStatus(req) }),
       }),
     );
 
@@ -851,6 +859,7 @@ export class RequestService {
     requestId: number,
     status: 'confirmed' | 'declined' | 'cancelled',
     cancellationReason?: string | null,
+    hourlyRate?: number | null,
   ): Promise<MappedRequest> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
@@ -891,23 +900,28 @@ export class RequestService {
       }
     } else {
       if (status === 'declined') {
-        if (request.receiverId !== userId) {
+        const receiverDecliningPending =
+          request.receiverId === userId && request.status === RequestStatus.PENDING;
+        const senderRejectingQuote =
+          request.senderId === userId &&
+          request.status === RequestStatus.ACCEPTED_BY_RECEIVER;
+        if (!receiverDecliningPending && !senderRejectingQuote) {
           throw new AppError('You are not authorized to decline this request', 403);
-        }
-        if (
-          request.status !== RequestStatus.PENDING &&
-          request.status !== RequestStatus.ACCEPTED_BY_RECEIVER
-        ) {
-          throw new AppError('Only pending requests can be declined', 400);
         }
       } else if (status === 'confirmed') {
         if (request.status === RequestStatus.PENDING) {
           if (request.receiverId !== userId) {
             throw new AppError('You are not authorized to accept this request', 403);
           }
+          if (hourlyRate == null || !Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+            throw new AppError('Enter a valid hourly rate before accepting', 400);
+          }
         } else if (request.status === RequestStatus.ACCEPTED_BY_RECEIVER) {
           if (request.senderId !== userId) {
             throw new AppError('Only the requester can give final confirmation', 403);
+          }
+          if (request.quotedHourlyRate == null || request.quotedHourlyRate <= 0) {
+            throw new AppError('This request does not have a valid support quote', 400);
           }
         } else {
           throw new AppError('This request cannot be confirmed right now', 400);
@@ -919,7 +933,12 @@ export class RequestService {
       status === 'confirmed' &&
       request.status === RequestStatus.ACCEPTED_BY_RECEIVER &&
       request.senderId === userId;
-    const otpVal = finalSenderConfirmation ? String(Math.floor(1000 + Math.random() * 9000)) : null;
+    const otpProximity = finalSenderConfirmation
+      ? otpProximityForRequest(request)
+      : null;
+    const otpVal = finalSenderConfirmation && otpProximity?.ready
+      ? String(randomInt(1000, 10_000))
+      : null;
     const nextStatus =
       status === 'confirmed'
         ? finalSenderConfirmation
@@ -936,7 +955,7 @@ export class RequestService {
       now.getTime() < request.fromDateTime.getTime();
 
     const cancellationFee = isLateCancellation
-      ? hourlyRateForRequest(request.receiver.profile, request.categoryLabel)
+      ? (request.quotedHourlyRate ?? 0)
       : 0;
     const normalizedCancellationReason = cancellationReason?.trim() || null;
     const storedCancellationReason =
@@ -947,6 +966,9 @@ export class RequestService {
       data: {
         status: nextStatus,
         otp: otpVal,
+        ...(status === 'confirmed' && request.status === RequestStatus.PENDING
+          ? { quotedHourlyRate: hourlyRate }
+          : {}),
         ...(status === 'cancelled'
           ? {
               cancelledAt: now,
@@ -975,14 +997,16 @@ export class RequestService {
       await NotificationService.createNotification(
         updatedRequest.senderId,
         'request_accepted',
-        `${receiverName} accepted your request. Please confirm to generate the OTP.`,
+        `${receiverName} quoted Rs ${updatedRequest.quotedHourlyRate}/hr for ${updatedRequest.categoryLabel}. Please accept or reject the quote.`,
         updatedRequest.receiverId,
       );
     } else if (status === 'confirmed') {
       await NotificationService.createNotification(
         updatedRequest.receiverId,
         'request_accepted',
-        `${senderName} confirmed the request. OTP is ready.`,
+        otpVal
+          ? `${senderName} confirmed the request. OTP is ready.`
+          : `${senderName} confirmed the request. OTP will appear when both of you are within 20 m.`,
         updatedRequest.senderId,
       );
     } else if (status === 'cancelled') {
@@ -1010,11 +1034,14 @@ export class RequestService {
         );
       }
     } else if (status === 'declined') {
+      const senderRejectedQuote = userId === updatedRequest.senderId;
       await NotificationService.createNotification(
-        updatedRequest.senderId,
+        senderRejectedQuote ? updatedRequest.receiverId : updatedRequest.senderId,
         'meet_canceled',
-        `${receiverName} declined your request`,
-        updatedRequest.receiverId,
+        senderRejectedQuote
+          ? `${senderName} rejected your Rs ${updatedRequest.quotedHourlyRate}/hr quote`
+          : `${receiverName} declined your request`,
+        userId,
       );
     }
 
@@ -1037,17 +1064,21 @@ export class RequestService {
       ...beneficiaryFields(updatedRequest),
       readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,
       readyToPayTip: updatedRequest.readyToPayTip,
-      requestHourlyRate: hourlyRateForRequest(
-        updatedRequest.receiver.profile,
-        updatedRequest.categoryLabel,
-      ),
+      requestHourlyRate: updatedRequest.quotedHourlyRate,
       ...profileFields(partner),
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
       otp: isSender ? null : updatedRequest.otp,
+      ...(otpProximity != null
+        ? {
+            otpProximityReady: otpProximity.ready,
+            otpDistanceMeters: otpProximity.distanceMeters,
+            otpProximityMessage: otpProximity.message,
+          }
+        : {}),
       requesterGender: updatedRequest.sender.profile?.gender ?? null,
       ...cancellationFields(updatedRequest),
-      ...cancellationPreviewFields(updatedRequest, updatedRequest.receiver.profile),
+      ...cancellationPreviewFields(updatedRequest),
     };
 
     const partnerRequest = {

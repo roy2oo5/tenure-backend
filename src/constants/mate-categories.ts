@@ -5,47 +5,44 @@ export type MateCategory = {
 
 /** Canonical mate categories (ids stored during onboarding). */
 export const MATE_CATEGORIES: MateCategory[] = [
-  { id: 'shopping', label: 'Shopping Mate' },
-  { id: 'movie', label: 'Movie Mate' },
-  { id: 'timepass', label: 'Time Pass Mate' },
-  { id: 'hospital', label: 'Hospital Mate' },
-  { id: 'talking', label: 'Talking Mate' },
-  { id: 'travel', label: 'Travel Mate' },
-  { id: 'home', label: 'Home Mate' },
-  { id: 'children', label: 'Children Care Mate' },
-  { id: 'food', label: 'Food Mate' },
-  { id: 'pub', label: 'Pub Mate' },
-  { id: 'vlog', label: 'Vlog Mate' },
-  { id: 'language', label: 'Language Mate' },
-  { id: 'day', label: 'Day Mate' },
-  { id: 'other', label: 'Other' },
+  { id: 'request', label: 'Support Based on Request' },
+  { id: 'hospital', label: 'Hospital Support' },
+  { id: 'shopping', label: 'Shopping Support' },
+  { id: 'fitness', label: 'Gym, Yoga & Jogging Support' },
+  { id: 'home', label: 'Home Clean-up Support' },
+  { id: 'driving', label: 'Driving Support' },
+  { id: 'sports', label: 'Sports Support' },
+  { id: 'events', label: 'Pub, Party & Event Support' },
+  { id: 'travel', label: 'Holiday & Travel Support' },
+  { id: 'day', label: 'Day Activity Support' },
+  { id: 'emotional', label: 'Friendly & Emotional Support' },
+  { id: 'newcomer', label: 'Newcomer & Consultant Support' },
+  { id: 'vlogging', label: 'Vlogging Support' },
 ];
 
 /** Legacy / profile-editor labels mapped to canonical category ids. */
 const CATEGORY_ALIASES: Record<string, string> = {
+  'open to any': 'request',
+  'open to any support request': 'request',
   'travel buddy': 'travel',
-  'study partner': 'other',
   'shopping mate': 'shopping',
   'shopping support': 'shopping',
-  'workout mate': 'other',
-  'workout support': 'other',
-  'movie mate': 'movie',
-  'movie support': 'movie',
+  'workout mate': 'fitness',
+  'workout support': 'fitness',
+  'gym support': 'fitness',
   'hospital mate': 'hospital',
   'hospital support': 'hospital',
-  'local guide': 'language',
-  'food buddy': 'food',
-  'food support': 'food',
-  'vlog mate': 'vlog',
-  'language partner': 'language',
-  'project partner': 'other',
-  'photography buddy': 'vlog',
-  'pet care buddy': 'children',
-  'gaming buddy': 'other',
-  'coffee mate': 'talking',
-  'food partner': 'food',
+  'home clean-up support': 'home',
+  'driving support': 'driving',
+  'sports support': 'sports',
+  'pub/party/event support': 'events',
+  'holiday/travel support': 'travel',
+  'friendly/emotional support': 'emotional',
+  'newcomer/orientation support': 'newcomer',
+  'vlog mate': 'vlogging',
+  'vlogging support': 'vlogging',
   'city walk': 'day',
-  'events': 'day',
+  events: 'events',
 };
 
 function findCategory(filterValue: string): MateCategory | null {
@@ -56,7 +53,7 @@ function findCategory(filterValue: string): MateCategory | null {
 
   const lower = trimmed.toLowerCase();
   const byIdOrLabel = MATE_CATEGORIES.find(
-    category => category.id === lower || category.label.toLowerCase() === lower,
+    (category) => category.id === lower || category.label.toLowerCase() === lower,
   );
   if (byIdOrLabel) {
     return byIdOrLabel;
@@ -64,12 +61,12 @@ function findCategory(filterValue: string): MateCategory | null {
 
   const aliasId = CATEGORY_ALIASES[lower];
   if (aliasId) {
-    return MATE_CATEGORIES.find(category => category.id === aliasId) ?? null;
+    return MATE_CATEGORIES.find((category) => category.id === aliasId) ?? null;
   }
 
   return (
     MATE_CATEGORIES.find(
-      category =>
+      (category) =>
         category.label.toLowerCase().includes(lower) ||
         lower.includes(category.label.toLowerCase()),
     ) ?? null
@@ -107,13 +104,11 @@ export function profileMatchesCategory(
   }
 
   const variants = new Set(
-    getCategoryMatchVariants(filterValue).map(value => value.toLowerCase()),
+    getCategoryMatchVariants(filterValue).map((value) => value.toLowerCase()),
   );
   if (!variants.size) {
     return true;
   }
 
-  return profileCategories.some(category =>
-    variants.has(category.trim().toLowerCase()),
-  );
+  return profileCategories.some((category) => variants.has(category.trim().toLowerCase()));
 }

@@ -6,6 +6,7 @@ export const phoneAuthSchema = z.object({
     .object({
       phone: z.string().min(10, 'Phone number is required').max(15, 'Phone number is too long'),
       accessToken: z.string().optional(),
+      deviceId: z.string().min(16).max(128).optional(),
       reqId: z.string().optional(),
       otp: z.string().optional(),
     })

@@ -12,13 +12,14 @@ import {
   updateUserSchema,
   phoneAuthSchema,
 } from '../validations/user.validation';
-import { createProfileSchema, verifyAadhaarSchema } from '../validations/profile.validation';
+import { createProfileSchema } from '../validations/profile.validation';
 import {
   discoverSearchSchema,
   mateProfileParamsSchema,
   savedMateParamsSchema,
 } from '../validations/discover.validation';
 import { Role } from '@prisma/client';
+import { aadhaarCredentialUploadMiddleware } from '../middlewares/upload.middleware';
 
 const router = Router();
 
@@ -250,6 +251,7 @@ router.post('/login', validate(loginSchema), UserController.login);
  *         description: Invalid phone number.
  */
 router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
+router.get('/phone-login-status', UserController.phoneLoginStatus);
 
 /**
  * @swagger
@@ -279,6 +281,7 @@ router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
  *         description: Not logged in or invalid token.
  */
 router.get('/me', protect, UserController.getMe);
+router.post('/logout', protect, UserController.logout);
 router.get('/active-session', protect, UserController.getActiveSession);
 
 /**
@@ -451,6 +454,7 @@ router.get('/muted', protect, MuteController.list);
 router.post('/profile', protect, validate(createProfileSchema), ProfileController.upsertMyProfile);
 router.get('/profile', protect, ProfileController.getMyProfile);
 router.patch('/profile/location', protect, ProfileController.updateLocation);
+router.patch('/profile/ready-now', protect, ProfileController.updateReadyNow);
 router.get('/saved-addresses', protect, ProfileController.getSavedAddresses);
 router.post('/saved-addresses', protect, ProfileController.saveAddress);
 router.patch(
@@ -463,13 +467,25 @@ router.patch(
   protect,
   ProfileController.selectSavedAddress,
 );
-router.post(
-  '/profile/aadhaar-verification',
+router.delete(
+  '/saved-addresses/:addressId',
   protect,
-  validate(verifyAadhaarSchema),
-  ProfileController.verifyAadhaar,
+  ProfileController.deleteSavedAddress,
 );
-router.post('/profile/aadhaar-qr-verification', protect, ProfileController.verifyAadhaarQR);
+router.post(
+  '/profile/aadhaar-shared-credential',
+  protect,
+  aadhaarCredentialUploadMiddleware.fields([
+    { name: 'credential', maxCount: 1 },
+    { name: 'CREDENTIAL', maxCount: 1 },
+  ]),
+  ProfileController.verifySharedAadhaarCredential,
+);
+router.patch(
+  '/profile/aadhaar-name',
+  protect,
+  ProfileController.useVerifiedAadhaarName,
+);
 
 router.get('/discover', protect, validate(discoverSearchSchema), DiscoverController.search);
 router.get(

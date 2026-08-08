@@ -12,11 +12,19 @@ vi.mock('@/config/database', () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    profile: {
+      updateMany: vi.fn(),
+    },
   },
 }));
 
 vi.mock('@/utils/tenure-id', () => ({
   generateUniqueTenureId: vi.fn().mockResolvedValue('AB123'),
+}));
+
+vi.mock('@/services/websocket.service', () => ({
+  disconnectUserForNewLogin: vi.fn(),
+  sendGlobalToAll: vi.fn(),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -108,6 +116,12 @@ describe('UserService', () => {
       };
 
       (prisma.user.findUnique as any).mockResolvedValue(existingUser);
+      (prisma.user.update as any).mockResolvedValue({
+        ...existingUser,
+        isActive: true,
+        authVersion: 1,
+        lastLoginAt: new Date(),
+      });
 
       const result = await UserService.authenticateByPhone('9876543210');
 
@@ -158,15 +172,46 @@ describe('UserService', () => {
       (prisma.user.update as any).mockResolvedValue({
         ...deactivatedUser,
         isActive: true,
+        authVersion: 1,
+        lastLoginAt: new Date(),
       });
 
       const result = await UserService.authenticateByPhone('9876543210');
 
       expect(prisma.user.update).toHaveBeenCalledWith({
         where: { id: deactivatedUser.id },
-        data: { isActive: true },
+        data: {
+          isActive: true,
+          authVersion: { increment: 1 },
+          lastLoginAt: expect.any(Date),
+          activeDeviceId: null,
+        },
       });
       expect(result.user.isActive).toBe(true);
+    });
+  });
+
+  describe('phoneLoginStatus', () => {
+    it('does not report another-device login for the same device', async () => {
+      (prisma.user.findUnique as any).mockResolvedValue({
+        lastLoginAt: new Date(),
+        activeDeviceId: 'same-device-id',
+      });
+
+      await expect(
+        UserService.phoneLoginStatus('9876543210', 'same-device-id'),
+      ).resolves.toEqual({ loggedInElsewhere: false });
+    });
+
+    it('reports another-device login for a different device', async () => {
+      (prisma.user.findUnique as any).mockResolvedValue({
+        lastLoginAt: new Date(),
+        activeDeviceId: 'first-device-id',
+      });
+
+      await expect(
+        UserService.phoneLoginStatus('9876543210', 'second-device-id'),
+      ).resolves.toEqual({ loggedInElsewhere: true });
     });
   });
 
@@ -227,6 +272,25 @@ describe('UserService', () => {
 
       expect(prisma.user.delete).toHaveBeenCalledWith({
         where: { id: 123 },
+      });
+    });
+  });
+
+  describe('logout', () => {
+    it('turns off Ready Now before clearing the login session', async () => {
+      (prisma.profile.updateMany as any).mockResolvedValue({ count: 1 });
+      (prisma.user.update as any).mockResolvedValue({});
+
+      await UserService.logout(123);
+
+      expect(prisma.profile.updateMany).toHaveBeenCalledWith({
+        where: { userId: 123, instantAvailable: true },
+        data: {
+          instantAvailable: false,
+          instantAvailableUntil: null,
+          instantCategories: [],
+          instantNote: null,
+        },
       });
     });
   });

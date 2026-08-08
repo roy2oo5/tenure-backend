@@ -1,6 +1,7 @@
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { CallStatus } from '@prisma/client';
+import { CallStatus, RequestStatus } from '@prisma/client';
+import { randomInt } from 'crypto';
 import jwt from 'jsonwebtoken';
 import url from 'url';
 import { env } from '../config/env';
@@ -8,6 +9,7 @@ import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import { sendPushNotification } from '../config/firebase';
 import { CallService } from './call.service';
+import { otpProximityForRequest } from '../utils/otp-proximity';
 
 // Store active chat connections: map of userId -> open chat sockets
 const connections = new Map<number, Set<WebSocket>>();
@@ -15,6 +17,75 @@ const chatRequestIds = new WeakMap<WebSocket, number>();
 
 // Store active global connections: map of userId -> Set of WebSockets
 const globalConnections = new Map<number, Set<WebSocket>>();
+
+const NEARBY_SUPPORTER_RADIUS_KM = 50;
+
+function distanceKm(
+  fromLatitude: number,
+  fromLongitude: number,
+  toLatitude: number,
+  toLongitude: number,
+): number {
+  const earthRadiusKm = 6371;
+  const radians = (degrees: number) => (degrees * Math.PI) / 180;
+  const latitudeDelta = radians(toLatitude - fromLatitude);
+  const longitudeDelta = radians(toLongitude - fromLongitude);
+  const fromLatitudeRadians = radians(fromLatitude);
+  const toLatitudeRadians = radians(toLatitude);
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitudeRadians) *
+      Math.cos(toLatitudeRadians) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function notifyNearbySupportersChanged(loggedInUserId: number): Promise<void> {
+  const recipientIds = [...globalConnections.keys()].filter((id) => id !== loggedInUserId);
+  if (!recipientIds.length) return;
+
+  const profiles = await prisma.profile.findMany({
+    where: { userId: { in: [loggedInUserId, ...recipientIds] } },
+    select: { userId: true, latitude: true, longitude: true },
+  });
+  const loginProfile = profiles.find((profile) => profile.userId === loggedInUserId);
+  if (loginProfile?.latitude == null || loginProfile.longitude == null) return;
+
+  for (const profile of profiles) {
+    if (
+      profile.userId === loggedInUserId ||
+      profile.latitude == null ||
+      profile.longitude == null
+    ) {
+      continue;
+    }
+    if (
+      distanceKm(
+        loginProfile.latitude,
+        loginProfile.longitude,
+        profile.latitude,
+        profile.longitude,
+      ) <= NEARBY_SUPPORTER_RADIUS_KM
+    ) {
+      sendGlobalToUser(profile.userId, { event: 'nearby_supporters_changed' });
+    }
+  }
+}
+
+export function disconnectUserForNewLogin(userId: number): void {
+  const sockets = new Set<WebSocket>([
+    ...(connections.get(userId) ?? []),
+    ...(globalConnections.get(userId) ?? []),
+  ]);
+  for (const socket of sockets) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ event: 'forced_logout' }));
+    }
+    socket.close(4004, 'Logged in on another device');
+  }
+  connections.delete(userId);
+  globalConnections.delete(userId);
+}
 
 export function initWebSocket(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
@@ -66,6 +137,19 @@ export function initWebSocket(server: HttpServer) {
         return;
       }
 
+      const authenticatedUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { authVersion: true, isActive: true },
+      });
+      if (
+        !authenticatedUser?.isActive ||
+        decoded.authVersion !== authenticatedUser.authVersion
+      ) {
+        ws.send(JSON.stringify({ event: 'forced_logout' }));
+        ws.close(4004, 'Logged in on another device');
+        return;
+      }
+
       if (pathname === '/ws' || pathname === '/ws/') {
         // Register global connection
         if (!globalConnections.has(userId)) {
@@ -73,6 +157,9 @@ export function initWebSocket(server: HttpServer) {
         }
         globalConnections.get(userId)!.add(ws);
         logger.info(`WebSocket global client connected: user=${userId}`);
+        notifyNearbySupportersChanged(userId).catch((error) =>
+          logger.error(`Could not notify nearby supporters after login: ${error}`),
+        );
 
         ws.on('message', async (messageData: string) => {
           try {
@@ -178,6 +265,34 @@ export function initWebSocket(server: HttpServer) {
           }
 
           if (type === 'location_update') {
+            const latitude = Number(data.latitude);
+            const longitude = Number(data.longitude);
+            if (
+              !Number.isFinite(latitude) ||
+              latitude < -90 ||
+              latitude > 90 ||
+              !Number.isFinite(longitude) ||
+              longitude < -180 ||
+              longitude > 180
+            ) {
+              ws.send(JSON.stringify({ error: 'Invalid live location coordinates' }));
+              return;
+            }
+            const isSender = meetRequest.senderId === userId;
+            const locationRequest = await prisma.request.update({
+              where: { id: requestId },
+              data: isSender
+                ? {
+                    senderCurrentLatitude: latitude,
+                    senderCurrentLongitude: longitude,
+                    senderLocationUpdatedAt: new Date(),
+                  }
+                : {
+                    receiverCurrentLatitude: latitude,
+                    receiverCurrentLongitude: longitude,
+                    receiverLocationUpdatedAt: new Date(),
+                  },
+            });
             const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
             const recipientSockets = connections.get(receiverId);
             if (recipientSockets) {
@@ -190,12 +305,55 @@ export function initWebSocket(server: HttpServer) {
                     JSON.stringify({
                       event: 'location_update',
                       userId,
-                      latitude: Number(data.latitude),
-                      longitude: Number(data.longitude),
+                      latitude,
+                      longitude,
                       heading: data.heading != null ? Number(data.heading) : null,
                     }),
                   );
                 }
+              }
+            }
+            const proximity = otpProximityForRequest(locationRequest);
+            const proximityPayload = {
+              event: 'otp_proximity',
+              requestId,
+              ready: proximity.ready,
+              distanceMeters: proximity.distanceMeters,
+              message: proximity.message,
+            };
+            sendToUserForRequest(meetRequest.senderId, requestId, proximityPayload);
+            sendToUserForRequest(meetRequest.receiverId, requestId, proximityPayload);
+
+            if (
+              locationRequest.status === RequestStatus.CONFIRMED &&
+              locationRequest.otp == null &&
+              proximity.ready
+            ) {
+              const candidateOtp = String(randomInt(1000, 10_000));
+              await prisma.request.updateMany({
+                where: {
+                  id: requestId,
+                  status: RequestStatus.CONFIRMED,
+                  otp: null,
+                },
+                data: { otp: candidateOtp },
+              });
+              const otpRequest = await prisma.request.findUnique({
+                where: { id: requestId },
+                select: { otp: true },
+              });
+              if (otpRequest?.otp) {
+                sendToUserForRequest(meetRequest.receiverId, requestId, {
+                  event: 'otp_ready',
+                  requestId,
+                  otp: otpRequest.otp,
+                  message: 'You are within 20 m. Share this OTP with the requester.',
+                });
+                sendToUserForRequest(meetRequest.senderId, requestId, {
+                  event: 'otp_ready',
+                  requestId,
+                  message: 'You are within 20 m. Ask the supporter for the OTP.',
+                });
               }
             }
             return;

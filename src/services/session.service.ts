@@ -1,4 +1,5 @@
 import { prisma } from '../config/database';
+import { otpProximityForRequest } from '../utils/otp-proximity';
 import { AppError } from '../utils/app-error';
 import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
 import { sendToUser, sendGlobalToUser } from './websocket.service';
@@ -6,12 +7,14 @@ import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 import { CONFIRMED_REQUEST_EXPIRY_WINDOW_MS } from './request.service';
 
+const MAX_SESSION_SECONDS = 12 * 60 * 60;
+
 export type MappedSession = {
   id: number;
   requestId: number;
   senderId: number;
   receiverId: number;
-  status: 'running' | 'pause_requested' | 'paused' | 'resume_requested' | 'ended';
+  status: 'running' | 'pause_requested' | 'paused' | 'resume_requested' | 'end_requested' | 'ended';
   startedAt: number;
   endedAt: number | null;
   fromDateTime: string;
@@ -90,11 +93,13 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
     SessionStatus.RUNNING,
     SessionStatus.PAUSE_REQUESTED,
     SessionStatus.RESUME_REQUESTED,
+    SessionStatus.END_REQUESTED,
   ];
   if (runningStatuses.includes(session.status) && session.lastTimerStart) {
     const deltaMs = Date.now() - session.lastTimerStart.getTime();
     elapsedSec += Math.floor(deltaMs / 1000);
   }
+  elapsedSec = Math.min(elapsedSec, MAX_SESSION_SECONDS);
 
   const billingAmount = parseFloat(((elapsedSec / 3600) * hourlyRate).toFixed(2));
 
@@ -111,6 +116,9 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
       break;
     case SessionStatus.RESUME_REQUESTED:
       statusMapped = 'resume_requested';
+      break;
+    case SessionStatus.END_REQUESTED:
+      statusMapped = 'end_requested';
       break;
     case SessionStatus.ENDED:
       statusMapped = 'ended';
@@ -185,6 +193,10 @@ export class SessionService {
       throw new AppError('This request has expired', 400);
     }
 
+    const proximity = otpProximityForRequest(request);
+    if (!proximity.ready) {
+      throw new AppError(proximity.message, 400);
+    }
     if (!_otp || request.otp !== _otp) {
       throw new AppError('Invalid verification OTP code', 400);
     }
@@ -225,7 +237,7 @@ export class SessionService {
     }
 
     const updated = await prisma.session.update({
-      where: { requestId },
+      where: { requestId: session.requestId },
       data: { 
         status: SessionStatus.PAUSE_REQUESTED,
         lastActionBy: userId,
@@ -271,7 +283,10 @@ export class SessionService {
       where: { requestId },
       data: {
         status: SessionStatus.PAUSED,
-        totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
+        totalElapsedSeconds: Math.min(
+          session.totalElapsedSeconds + additionalSeconds,
+          MAX_SESSION_SECONDS,
+        ),
         lastTimerStart: null,
         lastActionBy: null,
       },
@@ -374,12 +389,53 @@ export class SessionService {
       return mapSession(session, userId);
     }
 
+    // The receiver is the supporter and may end immediately. The sender is
+    // the beneficiary, whose end request must be confirmed by the supporter.
+    if (userId === session.senderId) {
+      if (session.status === SessionStatus.END_REQUESTED) {
+        return mapSession(session, userId);
+      }
+      const requested = await prisma.session.update({
+        where: { requestId },
+        data: {
+          status: SessionStatus.END_REQUESTED,
+          lastActionBy: userId,
+          endReason: endReason?.trim() || session.endReason || null,
+        },
+      });
+      const mappedSender = await mapSession(requested, requested.senderId);
+      const mappedReceiver = await mapSession(requested, requested.receiverId);
+      broadcastSessionUpdate(requested, mappedSender, mappedReceiver);
+      return mapSession(requested, userId);
+    }
+
+    return this.finalizeSession(session, endReason);
+  }
+
+  public static async confirmEndSession(userId: number, requestId: number): Promise<MappedSession> {
+    const session = await prisma.session.findUnique({ where: { requestId } });
+    if (!session) throw new AppError('Session not found', 404);
+    if (userId !== session.receiverId) {
+      throw new AppError('Only the supporter can confirm ending this tenure', 403);
+    }
+    if (session.status !== SessionStatus.END_REQUESTED) {
+      throw new AppError('No end request is pending', 400);
+    }
+    return this.finalizeSession(session, session.endReason);
+  }
+
+  private static async finalizeSession(
+    session: any,
+    endReason?: string | null,
+  ): Promise<MappedSession> {
+
     const now = new Date();
     let additionalSeconds = 0;
     const isRunning = ([
       SessionStatus.RUNNING,
       SessionStatus.PAUSE_REQUESTED,
       SessionStatus.RESUME_REQUESTED,
+      SessionStatus.END_REQUESTED,
     ] as SessionStatus[]).includes(session.status);
 
     if (isRunning && session.lastTimerStart) {
@@ -387,10 +443,13 @@ export class SessionService {
     }
 
     const updated = await prisma.session.update({
-      where: { requestId },
+      where: { requestId: session.requestId },
       data: {
         status: SessionStatus.ENDED,
-        totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
+        totalElapsedSeconds: Math.min(
+          session.totalElapsedSeconds + additionalSeconds,
+          MAX_SESSION_SECONDS,
+        ),
         lastTimerStart: null,
         endedAt: now,
         lastActionBy: null,
@@ -423,7 +482,7 @@ export class SessionService {
       console.error('Failed to create session billing notifications:', notifErr.message);
     }
 
-    return mapSession(updated, userId);
+    return mapSession(updated, updated.receiverId);
   }
 
   public static async getSession(userId: number, requestId: number): Promise<MappedSession> {

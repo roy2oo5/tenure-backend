@@ -38,6 +38,7 @@ export type DiscoverMateResult = {
   bloodGroup: string | null;
   availableDays: string[];
   availableTimeRange: string | null;
+  weeklyAvailability: unknown;
   bestTime: string | null;
   aadhaarVerified: boolean;
   phoneAdded: boolean;
@@ -329,6 +330,7 @@ function toDiscoverMate(
     bloodGroup: profile.bloodGroup,
     availableDays: profile.availableDays ?? [],
     availableTimeRange: profile.availableTimeRange,
+    weeklyAvailability: profile.weeklyAvailability,
     bestTime: profile.bestTime,
     aadhaarVerified: profile.aadhaarVerified,
     phoneAdded: Boolean(profile.user?.phone?.trim()),

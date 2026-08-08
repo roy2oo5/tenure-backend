@@ -5,6 +5,22 @@ import { Msg91Service } from '../services/msg91.service';
 import { AppError } from '../utils/app-error';
 
 export class UserController {
+  public static async phoneLoginStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const result = await UserService.phoneLoginStatus(
+        req.query.phone?.toString() ?? '',
+        req.query.deviceId?.toString(),
+      );
+      res.status(200).json({ status: 'success', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { email, password, name, role, phone } = req.body;
@@ -33,13 +49,13 @@ export class UserController {
 
   public static async phoneAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { phone, accessToken, reqId, otp } = req.body;
+      const { phone, accessToken, reqId, otp, deviceId } = req.body;
       if (accessToken) {
         await Msg91Service.verifyAccessToken(accessToken, phone);
       } else {
         await Msg91Service.verifyOtp(reqId, otp);
       }
-      const result = await UserService.authenticateByPhone(phone);
+      const result = await UserService.authenticateByPhone(phone, deviceId);
       res.status(200).json({
         status: 'success',
         data: result,
@@ -59,6 +75,18 @@ export class UserController {
         status: 'success',
         data: { user },
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        return next(new AppError('You are not authenticated.', 401));
+      }
+      await UserService.logout(req.user.id);
+      res.status(200).json({ status: 'success', data: null });
     } catch (error) {
       next(error);
     }

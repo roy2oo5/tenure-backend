@@ -20,6 +20,7 @@ vi.mock('@/config/database', () => ({
       findUnique: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
+      count: vi.fn(),
     },
     profile: {
       findUnique: vi.fn(),
@@ -43,6 +44,7 @@ describe('RequestService', () => {
   beforeEach(() => {
     (prisma.block.findFirst as any).mockResolvedValue(null);
     (prisma.request.findFirst as any).mockResolvedValue(null);
+    (prisma.request.count as any).mockResolvedValue(0);
     (prisma.profile.findUnique as any).mockResolvedValue({
       dob: new Date('1995-01-01'),
       isMinor: false,
@@ -55,6 +57,31 @@ describe('RequestService', () => {
   });
 
   describe('createRequest', () => {
+    it('should enforce the hourly request limit per receiver', async () => {
+      (prisma.request.count as any).mockResolvedValue(5);
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date(),
+          toDateTime: new Date(),
+        }),
+      ).rejects.toThrow(
+        'You can send up to 5 requests per hour to this supporter',
+      );
+
+      expect(prisma.request.count).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          receiverId: 2,
+          createdAt: { gte: expect.any(Date) },
+        },
+      });
+    });
+
     it('should throw an error if sender tries to send a request to themselves', async () => {
       await expect(
         RequestService.createRequest(1, {
@@ -765,6 +792,8 @@ describe('RequestService', () => {
         2,
         101,
         'confirmed',
+        undefined,
+        275,
       );
 
       expect(prisma.request.update).toHaveBeenCalledWith({
@@ -772,6 +801,7 @@ describe('RequestService', () => {
         data: {
           status: RequestStatus.ACCEPTED_BY_RECEIVER,
           otp: null,
+          quotedHourlyRate: 275,
         },
         include: {
           sender: { include: { profile: true } },
@@ -796,6 +826,13 @@ describe('RequestService', () => {
         toDateTime: new Date('2027-06-20T12:00:00.000Z'),
         message: 'Let us study together',
         status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        quotedHourlyRate: 275,
+        senderCurrentLatitude: 12.9716,
+        senderCurrentLongitude: 77.5946,
+        senderLocationUpdatedAt: new Date('2027-06-20T09:59:30.000Z'),
+        receiverCurrentLatitude: 12.9716,
+        receiverCurrentLongitude: 77.5946,
+        receiverLocationUpdatedAt: new Date('2027-06-20T09:59:30.000Z'),
       };
 
       const mockUpdated = {
@@ -868,6 +905,7 @@ describe('RequestService', () => {
         beneficiaryRelation: null,
         beneficiaryNote: null,
         status: RequestStatus.CONFIRMED,
+        quotedHourlyRate: 80,
         session: null,
         receiver: {
           id: 2,

@@ -4,6 +4,7 @@ import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
 import { Role, User } from '@prisma/client';
+import { disconnectUserForNewLogin, sendGlobalToAll } from './websocket.service';
 
 export type UserWithoutPassword = Omit<User, 'password'>;
 
@@ -17,8 +18,13 @@ const formatUser = (user: User): UserWithoutPassword => {
   return userWithoutPassword;
 };
 
-const signToken = (id: number, email: string | null, role: Role): string => {
-  return jwt.sign({ id, email, role }, env.JWT_SECRET);
+const signToken = (
+  id: number,
+  email: string | null,
+  role: Role,
+  authVersion: number,
+): string => {
+  return jwt.sign({ id, email, role, authVersion }, env.JWT_SECRET);
 };
 
 const normalizePhone = (phone: string): string => {
@@ -68,7 +74,7 @@ export class UserService {
       },
     });
 
-    const token = signToken(newUser.id, newUser.email, newUser.role);
+    const token = signToken(newUser.id, newUser.email, newUser.role, newUser.authVersion);
 
     return {
       user: formatUser(newUser),
@@ -80,7 +86,10 @@ export class UserService {
    * Find existing user by phone or create a new account.
    * Used by the mobile app so logout + re-login restores the same user/profile.
    */
-  public static async authenticateByPhone(phoneInput: string): Promise<AuthResponse> {
+  public static async authenticateByPhone(
+    phoneInput: string,
+    deviceId?: string,
+  ): Promise<AuthResponse> {
     const phone = normalizePhone(phoneInput);
 
     const existingUser = await prisma.user.findUnique({
@@ -88,16 +97,24 @@ export class UserService {
     });
 
     if (existingUser) {
-      if (!existingUser.isActive) {
-        await prisma.user.update({
-          where: { id: existingUser.id },
-          data: { isActive: true },
-        });
-        existingUser.isActive = true;
-      }
-      const token = signToken(existingUser.id, existingUser.email, existingUser.role);
+      const loggedInUser = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          isActive: true,
+          authVersion: { increment: 1 },
+          lastLoginAt: new Date(),
+          activeDeviceId: deviceId ?? null,
+        },
+      });
+      const token = signToken(
+        loggedInUser.id,
+        loggedInUser.email,
+        loggedInUser.role,
+        loggedInUser.authVersion,
+      );
+      disconnectUserForNewLogin(existingUser.id);
       return {
-        user: formatUser(existingUser),
+        user: formatUser(loggedInUser),
         token,
       };
     }
@@ -112,10 +129,12 @@ export class UserService {
         email,
         password: hashedPassword,
         name: `User ${phone}`,
+        lastLoginAt: new Date(),
+        activeDeviceId: deviceId ?? null,
       },
     });
 
-    const token = signToken(newUser.id, newUser.email, newUser.role);
+    const token = signToken(newUser.id, newUser.email, newUser.role, newUser.authVersion);
 
     return {
       user: formatUser(newUser),
@@ -144,7 +163,7 @@ export class UserService {
       user.isActive = true;
     }
 
-    const token = signToken(user.id, user.email, user.role);
+    const token = signToken(user.id, user.email, user.role, user.authVersion);
 
     return {
       user: formatUser(user),
@@ -162,6 +181,52 @@ export class UserService {
     }
 
     return formatUser(user);
+  }
+
+  public static async phoneLoginStatus(
+    phoneInput: string,
+    deviceId?: string,
+  ): Promise<{ loggedInElsewhere: boolean }> {
+    const phone = normalizePhone(phoneInput);
+    const user = await prisma.user.findUnique({
+      where: { phone },
+      select: { lastLoginAt: true, activeDeviceId: true },
+    });
+    const activeSince = Date.now() - 24 * 60 * 60 * 1000;
+    return {
+      loggedInElsewhere: Boolean(
+        user?.lastLoginAt &&
+          user.lastLoginAt.getTime() >= activeSince &&
+          (!deviceId || !user.activeDeviceId || user.activeDeviceId !== deviceId),
+      ),
+    };
+  }
+
+  public static async logout(userId: number): Promise<void> {
+    const readyNowReset = await prisma.profile.updateMany({
+      where: { userId, instantAvailable: true },
+      data: {
+        instantAvailable: false,
+        instantAvailableUntil: null,
+        instantCategories: [],
+        instantNote: null,
+      },
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        lastLoginAt: null,
+        activeDeviceId: null,
+        authVersion: { increment: 1 },
+      },
+    });
+    if (readyNowReset.count > 0) {
+      sendGlobalToAll({
+        event: 'instants_updated',
+        userId,
+        instantAvailable: false,
+      });
+    }
   }
 
   public static async getAllUsers(): Promise<UserWithoutPassword[]> {

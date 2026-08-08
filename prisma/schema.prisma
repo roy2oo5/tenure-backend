@@ -22,6 +22,9 @@ model User {
   role             Role           @default(USER)
   fcmToken         String?        @map("fcm_token")
   isActive         Boolean        @default(true) @map("is_active")
+  authVersion      Int            @default(0) @map("auth_version")
+  lastLoginAt      DateTime?      @map("last_login_at")
+  activeDeviceId   String?        @map("active_device_id")
   profile          Profile?
   sentRequests     Request[]      @relation("SentRequests")
   receivedRequests Request[]      @relation("ReceivedRequests")
@@ -39,6 +42,7 @@ model User {
   callsSent        Call[]         @relation("CallsSent")
   callsReceived    Call[]         @relation("CallsReceived")
   savedAddresses   SavedAddress[]
+  aadhaarCredentialVerifications AadhaarCredentialVerification[]
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 
@@ -78,6 +82,7 @@ model Profile {
   interests              String[]  @default([])
   availableDays          String[]  @default([]) @map("available_days")
   availableTimeRange     String?   @map("available_time_range")
+  weeklyAvailability     Json?     @map("weekly_availability")
   bestTime               String?   @map("best_time")
   comfortPreferredPlaces String?   @map("comfort_preferred_places")
   comfortTravelRange     String?   @map("comfort_travel_range")
@@ -85,6 +90,7 @@ model Profile {
   comfortNotWith         String?   @map("comfort_not_with")
   aadhaarVerified        Boolean   @default(false) @map("aadhaar_verified")
   aadhaarMasked          String?   @map("aadhaar_masked")
+  aadhaarAddress         String?   @map("aadhaar_address")
   gallery                String[]  @default([])
   livePhotoUrl           String?   @map("live_photo_url")
   instagram              String?
@@ -142,10 +148,17 @@ model Request {
   beneficiaryNote         String?       @map("beneficiary_note")
   readyToPayTravelCharges Boolean       @default(false) @map("ready_to_pay_travel_charges")
   readyToPayTip           Boolean       @default(false) @map("ready_to_pay_tip")
+  quotedHourlyRate        Float?        @map("quoted_hourly_rate")
   status                  RequestStatus @default(PENDING)
   messages                Message[]     @relation("RequestMessages")
   session                 Session?
   otp                     String?       @map("otp")
+  senderCurrentLatitude   Float?        @map("sender_current_latitude")
+  senderCurrentLongitude  Float?        @map("sender_current_longitude")
+  senderLocationUpdatedAt DateTime?     @map("sender_location_updated_at")
+  receiverCurrentLatitude Float?        @map("receiver_current_latitude")
+  receiverCurrentLongitude Float?       @map("receiver_current_longitude")
+  receiverLocationUpdatedAt DateTime?   @map("receiver_location_updated_at")
   cancelledAt             DateTime?     @map("cancelled_at")
   cancelledById           Int?          @map("cancelled_by_id")
   cancellationFee         Float         @default(0) @map("cancellation_fee")
@@ -179,6 +192,7 @@ enum SessionStatus {
   PAUSE_REQUESTED
   PAUSED
   RESUME_REQUESTED
+  END_REQUESTED
   ENDED
 }
 
@@ -238,6 +252,21 @@ model Block {
 
   @@unique([blockerId, blockedId])
   @@map("blocks")
+}
+
+model AadhaarCredentialVerification {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @map("user_id")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialHash String   @unique @map("credential_hash")
+  issuer         String?
+  extractedName  String   @map("extracted_name")
+  extractedDob   String   @map("extracted_dob")
+  referenceId    String?  @map("reference_id")
+  verifiedAt     DateTime @default(now()) @map("verified_at")
+
+  @@index([userId, verifiedAt])
+  @@map("aadhaar_credential_verifications")
 }
 
 model SavedAddress {

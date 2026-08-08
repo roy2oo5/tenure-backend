@@ -38,10 +38,10 @@ export const createProfileSchema = z.object({
     ),
     gender: z.string().min(1, 'Gender is required'),
     location: z.string().optional().nullable(),
-    country: z.string().min(1, 'Country is required'),
-    state: z.string().min(1, 'State is required'),
-    district: z.string().min(1, 'District is required'),
-    pinCode: z.string().min(1, 'PIN Code is required'),
+    country: z.string().optional().nullable(),
+    state: z.string().optional().nullable(),
+    district: z.string().optional().nullable(),
+    pinCode: z.string().optional().nullable(),
     latitude: nullableNumber(z.number().min(-90).max(90)),
     longitude: nullableNumber(z.number().min(-180).max(180)),
     languages: z
@@ -91,6 +91,15 @@ export const createProfileSchema = z.object({
     interests: stringArray,
     availableDays: stringArray,
     availableTimeRange: z.string().optional().nullable(),
+    weeklyAvailability: z
+      .record(
+        z.object({
+          start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+          end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        }),
+      )
+      .optional()
+      .nullable(),
     bestTime: z.string().optional().nullable(),
     comfortPreferredPlaces: z.string().optional().nullable(),
     comfortTravelRange: z.string().optional().nullable(),

@@ -22,6 +22,7 @@ router.post('/:id/session/pause-confirm', SessionController.pauseConfirm);
 router.post('/:id/session/resume-request', SessionController.resumeRequest);
 router.post('/:id/session/resume-confirm', SessionController.resumeConfirm);
 router.post('/:id/session/end', SessionController.end);
+router.post('/:id/session/end-confirm', SessionController.endConfirm);
 router.get('/:id/session', SessionController.get);
 
 

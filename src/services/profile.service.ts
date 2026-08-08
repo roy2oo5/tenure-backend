@@ -3,7 +3,11 @@ import { Prisma, Profile } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 import { AppError } from '../utils/app-error';
 import { sendGlobalToAll } from './websocket.service';
-import { processAadhaarSecureQR, AadhaarDemographics, matchAadhaarDemographics } from '../utils/aadhaar-qr';
+import {
+  processAadhaarSecureQR,
+  AadhaarDemographics,
+  matchAadhaarDemographics,
+} from '../utils/aadhaar-qr';
 
 export type ProfileUpsertInput = {
   profilePhoto?: string | null;
@@ -11,10 +15,10 @@ export type ProfileUpsertInput = {
   dob: Date;
   gender: string;
   location?: string | null;
-  country: string;
-  state: string;
-  district: string;
-  pinCode: string;
+  country?: string | null;
+  state?: string | null;
+  district?: string | null;
+  pinCode?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   languages: string[];
@@ -34,6 +38,7 @@ export type ProfileUpsertInput = {
   interests?: string[] | null;
   availableDays?: string[] | null;
   availableTimeRange?: string | null;
+  weeklyAvailability?: Record<string, { start: string; end: string }> | null;
   bestTime?: string | null;
   comfortPreferredPlaces?: string | null;
   comfortTravelRange?: string | null;
@@ -83,7 +88,11 @@ function normalizeCategoryRates(
   }
 
   const selectedCategories = new Set(categories.map((category) => category.trim()).filter(Boolean));
-  if (!selectedCategories.size || selectedCategories.has('Open to any')) {
+  if (
+    !selectedCategories.size ||
+    selectedCategories.has('Support Based on Request') ||
+    selectedCategories.has('Open to any')
+  ) {
     return Prisma.JsonNull;
   }
 
@@ -125,6 +134,12 @@ export class ProfileService {
     const existingProfile = await prisma.profile.findUnique({
       where: { userId },
       select: {
+        location: true,
+        country: true,
+        state: true,
+        district: true,
+        pinCode: true,
+        weeklyAvailability: true,
         aadhaarVerified: true,
         aadhaarMasked: true,
         livePhotoUrl: true,
@@ -145,7 +160,8 @@ export class ProfileService {
     // Every admitted user (age 16+) receives the full application experience.
     // Keep the field false for compatibility with the existing database schema.
     const isMinor = false;
-    const instantAvailable = data.instantAvailable !== undefined
+    const instantAvailable =
+      data.instantAvailable !== undefined
         ? data.instantAvailable
         : (existingProfile?.instantAvailable ?? false);
     const instantAvailableUntil =
@@ -194,18 +210,19 @@ export class ProfileService {
       dob: data.dob,
       isMinor,
       gender: data.gender,
-      location: data.location?.trim() || null,
-      country: data.country,
-      state: data.state,
-      district: data.district,
-      pinCode: data.pinCode,
+      location:
+        data.location !== undefined
+          ? data.location?.trim() || null
+          : (existingProfile?.location ?? null),
+      country: data.country?.trim() || existingProfile?.country || '',
+      state: data.state?.trim() || existingProfile?.state || '',
+      district: data.district?.trim() || existingProfile?.district || '',
+      pinCode: data.pinCode?.trim() || existingProfile?.pinCode || '',
       latitude: data.latitude ?? null,
       longitude: data.longitude ?? null,
       languages: data.languages,
       categories: data.categories ?? [],
-      hourlyRate: data.hourlyRate !== undefined
-          ? data.hourlyRate
-          : null,
+      hourlyRate: data.hourlyRate !== undefined ? data.hourlyRate : null,
       categoryRates: normalizeCategoryRates(data.categories ?? [], data.categoryRates),
       about: data.about ?? null,
       vibes: data.vibes ?? [],
@@ -224,6 +241,10 @@ export class ProfileService {
       interests: data.interests ?? [],
       availableDays: data.availableDays ?? [],
       availableTimeRange: normalizeTimeRange(data.availableTimeRange),
+      weeklyAvailability:
+        data.weeklyAvailability === undefined
+          ? existingProfile?.weeklyAvailability ?? Prisma.JsonNull
+          : data.weeklyAvailability ?? Prisma.JsonNull,
       bestTime: data.bestTime ?? null,
       comfortPreferredPlaces: data.comfortPreferredPlaces ?? null,
       comfortTravelRange: data.comfortTravelRange ?? null,
@@ -332,7 +353,10 @@ export class ProfileService {
 
     const result = processAadhaarSecureQR(qrBuffer, uidaiPublicKeyPem);
     if (!result.isValid || !result.data) {
-      throw new AppError(`Aadhaar QR Verification failed: ${result.error || 'Invalid QR payload'}`, 400);
+      throw new AppError(
+        `Aadhaar QR Verification failed: ${result.error || 'Invalid QR payload'}`,
+        400,
+      );
     }
 
     const demographics = result.data;
@@ -455,7 +479,7 @@ export class ProfileService {
    */
   public static async updateLocation(
     userId: number,
-    location: { latitude: number; longitude: number },
+    location: { latitude: number; longitude: number; location?: string },
   ): Promise<Profile> {
     const profile = await prisma.profile.findUnique({ where: { userId } });
     if (!profile) {
@@ -466,7 +490,40 @@ export class ProfileService {
       data: {
         latitude: location.latitude,
         longitude: location.longitude,
+        ...(location.location !== undefined ? { location: location.location.trim() || null } : {}),
       },
     });
+  }
+
+  public static async updateReadyNow(
+    userId: number,
+    data: { instantAvailable: boolean; latitude?: number; longitude?: number },
+  ): Promise<Profile> {
+    const existing = await prisma.profile.findUnique({ where: { userId } });
+    if (!existing) {
+      throw new AppError('Profile not found', 404);
+    }
+    const latitude = data.latitude ?? existing.latitude;
+    const longitude = data.longitude ?? existing.longitude;
+    if (data.instantAvailable && (latitude == null || longitude == null)) {
+      throw new AppError('Location is required to enable Ready Now', 400);
+    }
+    const profile = await prisma.profile.update({
+      where: { userId },
+      data: {
+        instantAvailable: data.instantAvailable,
+        instantAvailableUntil: data.instantAvailable ? existing.instantAvailableUntil : null,
+        instantCategories: data.instantAvailable ? existing.instantCategories : [],
+        instantNote: data.instantAvailable ? existing.instantNote : null,
+        ...(data.latitude !== undefined ? { latitude } : {}),
+        ...(data.longitude !== undefined ? { longitude } : {}),
+      },
+    });
+    sendGlobalToAll({
+      event: 'instants_updated',
+      userId,
+      instantAvailable: profile.instantAvailable,
+    });
+    return profile;
   }
 }

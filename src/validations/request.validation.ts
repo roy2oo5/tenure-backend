@@ -112,5 +112,6 @@ export const updateRequestStatusSchema = z.object({
       .trim()
       .max(240, 'Cancellation reason must be 240 characters or less')
       .optional(),
+    hourlyRate: z.number().positive().max(100000).optional(),
   }),
 });

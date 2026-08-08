@@ -71,6 +71,17 @@ export class SessionController {
     }
   }
 
+  public static async endConfirm(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('Unauthorized', 401));
+      const requestId = parseInt(req.params.id, 10);
+      const session = await SessionService.confirmEndSession(req.user.id, requestId);
+      res.status(200).json({ status: 'success', data: { session } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) return next(new AppError('Unauthorized', 401));

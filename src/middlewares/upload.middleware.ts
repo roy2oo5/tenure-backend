@@ -40,3 +40,16 @@ export const genericUploadMiddleware = multer({
     fileSize: 25 * 1024 * 1024,
   },
 });
+
+export const aadhaarCredentialUploadMiddleware = multer({
+  storage,
+  fileFilter: (_req, file, cb) => {
+    const isZip = file.originalname.toLowerCase().endsWith('.zip') &&
+      ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(file.mimetype);
+    if (!isZip) {
+      return cb(new AppError('A ZIP file from the myAadhaar app is expected.', 400) as any, false);
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});

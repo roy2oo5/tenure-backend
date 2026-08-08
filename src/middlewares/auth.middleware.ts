@@ -9,6 +9,7 @@ interface DecodedToken {
   id: number;
   email?: string | null;
   role: Role;
+  authVersion: number;
   iat: number;
   exp?: number;
 }
@@ -41,6 +42,7 @@ export const protect = async (
         role: true,
         name: true,
         isActive: true,
+        authVersion: true,
       },
     });
 
@@ -50,6 +52,10 @@ export const protect = async (
 
     if (!user.isActive) {
       return next(new AppError('This user account has been deactivated.', 401));
+    }
+
+    if (decoded.authVersion !== user.authVersion) {
+      return next(new AppError('This account was logged in on another device. Please log in again.', 401));
     }
 
     // Grant access to protected route by attaching user to request

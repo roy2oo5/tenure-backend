@@ -45,6 +45,12 @@ describe('SessionService', () => {
     status: RequestStatus.CONFIRMED,
     otp: '1234',
     fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+    senderCurrentLatitude: 13.3409,
+    senderCurrentLongitude: 74.7421,
+    senderLocationUpdatedAt: new Date(),
+    receiverCurrentLatitude: 13.3409,
+    receiverCurrentLongitude: 74.7421,
+    receiverLocationUpdatedAt: new Date(),
   };
 
   const mockSenderUser = {
@@ -345,11 +351,12 @@ describe('SessionService', () => {
       });
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser); // receiver is the mate (rate 60)
 
-      const result = await SessionService.endSession(1, 101);
+      // Receiver is the supporter, so their end action is immediate.
+      const result = await SessionService.endSession(2, 101);
       expect(result.status).toBe('ended');
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(3600);
-      expect(result.billingAmount).toBeCloseTo(60.00, 1);
+      expect(result.billingAmount).toBeCloseTo(50.00, 1);
     });
   });
 });
