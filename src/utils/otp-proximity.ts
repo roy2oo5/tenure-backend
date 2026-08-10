@@ -79,7 +79,8 @@ export function otpProximityForRequest(
     return {
       ready: false,
       distanceMeters: roundedDistance,
-      message: `Move closer to the other user to generate the OTP. You are about ${roundedDistance} m apart; 20 m or less is required.`,
+      message:
+        'Move close to the other user to generate the OTP (20 m or less is required).',
     };
   }
   return {

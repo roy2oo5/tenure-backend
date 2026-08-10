@@ -8,6 +8,16 @@ import {
 } from '../services/image-validator.service';
 import { ProfileService } from '../services/profile.service';
 
+const userMediaFolder = (req: Request): string => {
+  const userId = req.user?.id ?? 'unknown';
+  const safeName = (req.user?.name ?? 'user')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'user';
+  return `users/${userId}-${safeName}`;
+};
+
 export class UploadController {
   public static async listAvatars(
     req: Request,
@@ -34,7 +44,12 @@ export class UploadController {
       const host = req.get('host');
       const protocol = req.protocol;
 
-      const url = await UploadService.uploadFile(req.file, 'uploads', host, protocol);
+      const url = await UploadService.uploadFile(
+        req.file,
+        `${userMediaFolder(req)}/uploads`,
+        host,
+        protocol,
+      );
 
       res.status(200).json({
         status: 'success',
@@ -86,7 +101,12 @@ export class UploadController {
 
       const host = req.get('host');
       const protocol = req.protocol;
-      const url = await UploadService.uploadFile(req.file, 'profiles', host, protocol);
+      const url = await UploadService.uploadFile(
+        req.file,
+        `${userMediaFolder(req)}/profile`,
+        host,
+        protocol,
+      );
 
       // If authenticated user is present, update user's profile photo in DB
       let profile = null;
@@ -131,7 +151,7 @@ export class UploadController {
       const protocol = req.protocol;
       const uploadRoute = req.route?.path;
       const isLivePhoto = uploadRoute === '/live-gallery';
-      const folder =
+      const mediaTypeFolder =
         uploadRoute === '/self-gallery'
           ? 'gallery/self'
           : uploadRoute === '/vehicle-gallery'
@@ -139,6 +159,7 @@ export class UploadController {
             : isLivePhoto
               ? 'gallery/live-photo'
               : 'gallery';
+      const folder = `${userMediaFolder(req)}/${mediaTypeFolder}`;
       const url = await UploadService.uploadFile(req.file, folder, host, protocol);
 
       // If authenticated user is present, append photo to user's profile gallery in DB

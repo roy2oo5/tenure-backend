@@ -4,7 +4,7 @@ import { connectDB, prisma } from './config/database';
 import { logger } from './utils/logger';
 import { initWebSocket } from './services/websocket.service';
 import { seedCategories } from './utils/seed';
-
+import { startMessageRetentionCleanup } from './services/message-retention.service';
 
 // Standard Uncaught Exception handler
 process.on('uncaughtException', (err) => {
@@ -28,7 +28,7 @@ const boot = async () => {
     logger.info(`🚀 Server listening on port ${env.PORT} in ${env.NODE_ENV} mode`);
   });
   initWebSocket(server);
-
+  startMessageRetentionCleanup();
 };
 
 boot();

@@ -142,6 +142,7 @@ export class ProfileService {
         weeklyAvailability: true,
         aadhaarVerified: true,
         aadhaarMasked: true,
+        aadhaarName: true,
         livePhotoUrl: true,
         instantAvailable: true,
         instantAvailableUntil: true,
@@ -204,6 +205,16 @@ export class ProfileService {
         ? data.emergencyRelation?.trim() || null
         : (existingProfile?.emergencyRelation ?? null);
 
+    const fullWeekDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+    const fullWeekAvailability = Object.fromEntries(
+      fullWeekDays.map((day) => [day, { start: '00:00', end: '23:59' }]),
+    );
+    const isNewProfile = existingProfile === null;
+    const incomingAvailabilityIsEmpty =
+      !data.availableDays?.length &&
+      (!data.weeklyAvailability || Object.keys(data.weeklyAvailability).length === 0);
+    const useDefaultAvailability = isNewProfile && incomingAvailabilityIsEmpty;
+
     const formattedData = {
       profilePhoto: data.profilePhoto ?? null,
       fullName: data.fullName,
@@ -239,10 +250,14 @@ export class ProfileService {
         ? (data.willingRequesterCar ?? null)
         : null,
       interests: data.interests ?? [],
-      availableDays: data.availableDays ?? [],
-      availableTimeRange: normalizeTimeRange(data.availableTimeRange),
+      availableDays: useDefaultAvailability ? fullWeekDays : (data.availableDays ?? []),
+      availableTimeRange: useDefaultAvailability
+        ? '00:00 - 23:59'
+        : normalizeTimeRange(data.availableTimeRange),
       weeklyAvailability:
-        data.weeklyAvailability === undefined
+        useDefaultAvailability
+          ? fullWeekAvailability
+          : data.weeklyAvailability === undefined
           ? existingProfile?.weeklyAvailability ?? Prisma.JsonNull
           : data.weeklyAvailability ?? Prisma.JsonNull,
       bestTime: data.bestTime ?? null,
@@ -252,6 +267,7 @@ export class ProfileService {
       comfortNotWith: data.comfortNotWith ?? null,
       aadhaarVerified: existingProfile?.aadhaarVerified ?? false,
       aadhaarMasked: existingProfile?.aadhaarMasked ?? null,
+      aadhaarName: existingProfile?.aadhaarName ?? null,
       gallery: data.gallery ?? [],
       livePhotoUrl:
         data.livePhotoUrl !== undefined

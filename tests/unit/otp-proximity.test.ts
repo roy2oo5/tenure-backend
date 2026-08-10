@@ -25,6 +25,9 @@ describe('OTP proximity validation', () => {
     const result = otpProximityForRequest(locations(12.9720), now);
     expect(result.ready).toBe(false);
     expect(result.distanceMeters).toBeGreaterThan(20);
+    expect(result.message).toBe(
+      'Move close to the other user to generate the OTP (20 m or less is required).',
+    );
   });
 
   it('blocks OTP generation when either live location is stale', () => {

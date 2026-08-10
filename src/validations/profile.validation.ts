@@ -25,7 +25,10 @@ function ageFromDob(dob: Date): number {
 export const createProfileSchema = z.object({
   body: z.object({
     profilePhoto: z.string().optional().nullable(),
-    fullName: z.string().min(1, 'Full name is required'),
+    fullName: z
+      .string()
+      .min(1, 'Full name is required')
+      .max(20, 'Full name must be 20 characters or fewer'),
     dob: z.preprocess(
       (arg) => (typeof arg === 'string' ? new Date(arg) : arg),
       z.date({

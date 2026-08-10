@@ -110,5 +110,18 @@ export function profileMatchesCategory(
     return true;
   }
 
+  const acceptsAnySpecificRequest = profileCategories.some((category) => {
+    const normalized = category.trim().toLowerCase();
+    return (
+      normalized === 'request' ||
+      normalized === 'support based on request' ||
+      normalized === 'open to any' ||
+      normalized === 'open to any support request'
+    );
+  });
+  if (acceptsAnySpecificRequest) {
+    return true;
+  }
+
   return profileCategories.some((category) => variants.has(category.trim().toLowerCase()));
 }

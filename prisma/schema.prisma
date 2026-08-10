@@ -90,6 +90,7 @@ model Profile {
   comfortNotWith         String?   @map("comfort_not_with")
   aadhaarVerified        Boolean   @default(false) @map("aadhaar_verified")
   aadhaarMasked          String?   @map("aadhaar_masked")
+  aadhaarName            String?   @map("aadhaar_name")
   aadhaarAddress         String?   @map("aadhaar_address")
   gallery                String[]  @default([])
   livePhotoUrl           String?   @map("live_photo_url")

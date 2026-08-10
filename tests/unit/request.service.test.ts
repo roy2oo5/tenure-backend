@@ -30,6 +30,7 @@ vi.mock('@/config/database', () => ({
     },
     message: {
       findMany: vi.fn(),
+      deleteMany: vi.fn(),
     },
     notification: {
       create: vi.fn(),
@@ -45,6 +46,7 @@ describe('RequestService', () => {
     (prisma.block.findFirst as any).mockResolvedValue(null);
     (prisma.request.findFirst as any).mockResolvedValue(null);
     (prisma.request.count as any).mockResolvedValue(0);
+    (prisma.message.deleteMany as any).mockResolvedValue({ count: 0 });
     (prisma.profile.findUnique as any).mockResolvedValue({
       dob: new Date('1995-01-01'),
       isMinor: false,
@@ -69,9 +71,7 @@ describe('RequestService', () => {
           fromDateTime: new Date(),
           toDateTime: new Date(),
         }),
-      ).rejects.toThrow(
-        'You can send up to 5 requests per hour to this supporter',
-      );
+      ).rejects.toThrow('You can send up to 5 requests per hour to this supporter');
 
       expect(prisma.request.count).toHaveBeenCalledWith({
         where: {
@@ -195,14 +195,65 @@ describe('RequestService', () => {
               RequestStatus.CONFIRMED,
             ],
           },
-          OR: [
-            { session: null },
-            { session: { is: { status: { not: 'ENDED' } } } },
-          ],
+          OR: [{ session: null }, { session: { is: { status: { not: 'ENDED' } } } }],
         },
         select: { id: true },
       });
       expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('should allow requests to different receivers while another request is active', async () => {
+      const receiver = {
+        id: 3,
+        name: 'Another Supporter',
+        tenureId: 'TN456',
+        profile: {
+          fullName: 'Another Supporter',
+          profilePhoto: null,
+        },
+      };
+      const createdRequest = {
+        id: 102,
+        senderId: 1,
+        receiverId: 3,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        message: '',
+        status: RequestStatus.PENDING,
+        createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
+      };
+
+      (prisma.user.findUnique as any).mockResolvedValue(receiver);
+      (prisma.request.findFirst as any).mockResolvedValue(null);
+      (prisma.request.create as any).mockResolvedValue(createdRequest);
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 3,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        }),
+      ).resolves.toMatchObject({ id: 102, mateUserId: 3 });
+
+      expect(prisma.request.count).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          receiverId: 3,
+          createdAt: { gte: expect.any(Date) },
+        },
+      });
+      expect(prisma.request.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ senderId: 1, receiverId: 3 }),
+        }),
+      );
     });
 
     it('should check duplicates without blocking ended sessions', async () => {
@@ -255,10 +306,7 @@ describe('RequestService', () => {
               RequestStatus.CONFIRMED,
             ],
           },
-          OR: [
-            { session: null },
-            { session: { is: { status: { not: 'ENDED' } } } },
-          ],
+          OR: [{ session: null }, { session: { is: { status: { not: 'ENDED' } } } }],
         },
         select: { id: true },
       });
@@ -338,6 +386,7 @@ describe('RequestService', () => {
           profilePhoto: '',
           gallery: [],
           categories: ['Hospital support'],
+          categoryRates: { 'Hospital support': 250 },
           availableDays: [],
           availableTimeRange: null,
         },
@@ -597,9 +646,7 @@ describe('RequestService', () => {
         },
       ];
 
-      (prisma.request.findMany as any)
-        .mockResolvedValueOnce(mockSent)
-        .mockResolvedValueOnce([]);
+      (prisma.request.findMany as any).mockResolvedValueOnce(mockSent).mockResolvedValueOnce([]);
 
       const result = await RequestService.listUserRequests(3);
 
@@ -711,9 +758,9 @@ describe('RequestService', () => {
     it('should throw an error if request does not exist', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        RequestService.updateRequestStatus(1, 999, 'confirmed'),
-      ).rejects.toThrow('Request not found');
+      await expect(RequestService.updateRequestStatus(1, 999, 'confirmed')).rejects.toThrow(
+        'Request not found',
+      );
     });
 
     it('should throw an error if sender tries to accept a pending request', async () => {
@@ -726,9 +773,9 @@ describe('RequestService', () => {
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(
-        RequestService.updateRequestStatus(1, 101, 'confirmed'),
-      ).rejects.toThrow('You are not authorized to accept this request');
+      await expect(RequestService.updateRequestStatus(1, 101, 'confirmed')).rejects.toThrow(
+        'You are not authorized to accept this request',
+      );
     });
 
     it('should throw an error if receiver tries to cancel', async () => {
@@ -741,9 +788,9 @@ describe('RequestService', () => {
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(
-        RequestService.updateRequestStatus(2, 101, 'cancelled'),
-      ).rejects.toThrow('You are not authorized to cancel this request');
+      await expect(RequestService.updateRequestStatus(2, 101, 'cancelled')).rejects.toThrow(
+        'You are not authorized to cancel this request',
+      );
     });
 
     it('should mark request as waiting for sender confirmation when receiver accepts', async () => {
@@ -788,13 +835,7 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(
-        2,
-        101,
-        'confirmed',
-        undefined,
-        275,
-      );
+      const result = await RequestService.updateRequestStatus(2, 101, 'confirmed', undefined, 275);
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
@@ -863,11 +904,7 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(
-        1,
-        101,
-        'confirmed',
-      );
+      const result = await RequestService.updateRequestStatus(1, 101, 'confirmed');
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
@@ -885,7 +922,7 @@ describe('RequestService', () => {
       expect(result.otp).toBeNull();
     });
 
-    it('should charge one hour when sender cancels a confirmed request within 1 hour of start', async () => {
+    it('should not charge a fee when sender cancels within 1 hour of start', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2027-06-20T09:30:00.000Z'));
 
@@ -924,8 +961,8 @@ describe('RequestService', () => {
       const mockUpdated = {
         ...mockRequest,
         status: RequestStatus.CANCELLED,
-        cancellationFee: 80,
-        cancellationFeeReason: 'Cancelled within 1 hour of the scheduled start time',
+        cancellationFee: 0,
+        cancellationFeeReason: null,
         cancelledAt: new Date('2027-06-20T09:30:00.000Z'),
         cancelledById: 1,
         createdAt: new Date('2027-06-20T08:00:00.000Z'),
@@ -944,11 +981,7 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(
-        1,
-        101,
-        'cancelled',
-      );
+      const result = await RequestService.updateRequestStatus(1, 101, 'cancelled');
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
@@ -957,8 +990,8 @@ describe('RequestService', () => {
           otp: null,
           cancelledAt: new Date('2027-06-20T09:30:00.000Z'),
           cancelledById: 1,
-          cancellationFee: 80,
-          cancellationFeeReason: 'Cancelled within 1 hour of the scheduled start time',
+          cancellationFee: 0,
+          cancellationFeeReason: null,
         },
         include: {
           sender: { include: { profile: true } },
@@ -966,9 +999,9 @@ describe('RequestService', () => {
         },
       });
       expect(result.status).toBe('cancelled');
-      expect(result.cancellationFee).toBe(80);
+      expect(result.cancellationFee).toBe(0);
       expect(result.cancelledById).toBe(1);
-      expect(prisma.notification.create).toHaveBeenCalledTimes(3);
+      expect(prisma.notification.create).toHaveBeenCalledTimes(1);
     });
 
     it('should block request cancellation after the session has started', async () => {
@@ -985,9 +1018,9 @@ describe('RequestService', () => {
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(
-        RequestService.updateRequestStatus(1, 101, 'cancelled'),
-      ).rejects.toThrow('This meet has already started. End the session instead.');
+      await expect(RequestService.updateRequestStatus(1, 101, 'cancelled')).rejects.toThrow(
+        'This meet has already started. End the session instead.',
+      );
     });
   });
 
@@ -995,9 +1028,7 @@ describe('RequestService', () => {
     it('should throw an error if request does not exist', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
-      await expect(RequestService.getRequestMessages(1, 999)).rejects.toThrow(
-        'Request not found',
-      );
+      await expect(RequestService.getRequestMessages(1, 999)).rejects.toThrow('Request not found');
     });
 
     it('should throw an error if user is not part of the request', async () => {
@@ -1009,9 +1040,9 @@ describe('RequestService', () => {
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(
-        RequestService.getRequestMessages(999, 101),
-      ).rejects.toThrow('You are not authorized to view messages for this request');
+      await expect(RequestService.getRequestMessages(999, 101)).rejects.toThrow(
+        'You are not authorized to view messages for this request',
+      );
     });
 
     it('should successfully retrieve and map chat messages', async () => {
@@ -1053,8 +1084,14 @@ describe('RequestService', () => {
 
       expect(prisma.request.findUnique).toHaveBeenCalledWith({ where: { id: 101 } });
       expect(prisma.message.findMany).toHaveBeenCalledWith({
-        where: { requestId: 101 },
+        where: {
+          requestId: 101,
+          createdAt: { gte: expect.any(Date) },
+        },
         orderBy: { createdAt: 'asc' },
+      });
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: expect.any(Date) } },
       });
       expect(result.length).toBe(2);
       expect(result[0].id).toBe(401);

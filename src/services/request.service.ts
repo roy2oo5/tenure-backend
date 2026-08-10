@@ -5,6 +5,8 @@ import { NotificationService } from './notification.service';
 import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
 import { randomInt } from 'crypto';
 import { otpProximityForRequest } from '../utils/otp-proximity';
+import { getCategoryMatchVariants } from '../constants/mate-categories';
+import { deleteExpiredMessages, messageRetentionCutoff } from './message-retention.service';
 
 export type CreateRequestInput = {
   receiverId: number;
@@ -94,6 +96,9 @@ export type MappedRequest = {
   mateWebsite?: string | null;
   status: FrontendRequestStatus;
   sentAt: string;
+  historyEventAt?: string | null;
+  historyActor?: 'you' | 'mate' | null;
+  historyReason?: string | null;
   sessionStatus?: string | null;
   sessionEndedAt?: string | null;
   sessionElapsedSec?: number | null;
@@ -110,9 +115,7 @@ export type MappedRequest = {
   cancellationFeePreview: number;
 };
 
-const LATE_CANCELLATION_WINDOW_MS = 60 * 60 * 1000;
 const SCHEDULED_REQUEST_LEAD_TIME_MS = 15 * 60 * 1000;
-const LATE_CANCELLATION_REASON = 'Cancelled within 1 hour of the scheduled start time';
 export const CONFIRMED_REQUEST_EXPIRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 const EXPIRABLE_STATUSES = [
   RequestStatus.PENDING,
@@ -154,13 +157,7 @@ const mapStatusToBackend = (status: 'declined' | 'cancelled'): RequestStatus => 
 };
 
 const formatSentAt = (date: Date): string => {
-  return date.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return date.toISOString();
 };
 
 const mapRequestStatusWithSession = (
@@ -194,18 +191,20 @@ const shouldExpireRequest = (request: {
   const meetStartedWithoutRequiredConfirmation = Boolean(
     (request.status === RequestStatus.PENDING ||
       request.status === RequestStatus.ACCEPTED_BY_RECEIVER) &&
-      !isInstantBooking &&
-      startsAt <= Date.now(),
+    !isInstantBooking &&
+    startsAt <= Date.now(),
   );
   const confirmedMeetExpiredWithoutSession = Boolean(
     request.status === RequestStatus.CONFIRMED &&
-      startsAt + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS <= Date.now() &&
-      !request.session,
+    startsAt + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS <= Date.now() &&
+    !request.session,
   );
 
   return (
     isExpirableStatus(request.status) &&
-    (responseTimedOut || meetStartedWithoutRequiredConfirmation || confirmedMeetExpiredWithoutSession)
+    (responseTimedOut ||
+      meetStartedWithoutRequiredConfirmation ||
+      confirmedMeetExpiredWithoutSession)
   );
 };
 
@@ -218,6 +217,53 @@ const effectiveRequestStatus = (request: {
   session?: unknown | null;
 }): RequestStatus => {
   return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
+};
+
+const requestHistoryFields = (
+  request: {
+    status: RequestStatus;
+    createdAt: Date;
+    updatedAt: Date;
+    fromDateTime?: Date | null;
+    responseDeadlineAt?: Date | null;
+    instantBooking?: boolean | null;
+    cancelledAt?: Date | null;
+    cancelledById?: number | null;
+    cancellationFeeReason?: string | null;
+    session?: { status: SessionStatus; endedAt?: Date | null } | null;
+  },
+  viewerId: number,
+) => {
+  const status = effectiveRequestStatus(request);
+  let eventAt = request.createdAt;
+
+  if (request.session?.status === SessionStatus.ENDED && request.session.endedAt) {
+    eventAt = request.session.endedAt;
+  } else if (status === RequestStatus.CANCELLED || status === RequestStatus.DECLINED) {
+    eventAt = request.cancelledAt ?? request.updatedAt;
+  } else if (status === RequestStatus.EXPIRED) {
+    if (request.status === RequestStatus.EXPIRED) {
+      eventAt = request.updatedAt;
+    } else if (request.responseDeadlineAt && request.responseDeadlineAt <= new Date()) {
+      eventAt = request.responseDeadlineAt;
+    } else if (request.fromDateTime) {
+      eventAt =
+        request.status === RequestStatus.CONFIRMED
+          ? new Date(request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS)
+          : request.fromDateTime;
+    }
+  }
+
+  return {
+    historyEventAt: eventAt.toISOString(),
+    historyActor:
+      request.cancelledById == null
+        ? null
+        : request.cancelledById === viewerId
+          ? ('you' as const)
+          : ('mate' as const),
+    historyReason: request.cancellationFeeReason ?? null,
+  };
 };
 
 const mapSessionStatus = (session?: { status: SessionStatus } | null): string | null => {
@@ -272,13 +318,46 @@ const hasUserProvidedEmail = (email?: string | null): boolean => {
   return Boolean(normalized && !/^phone_\d+@tenure\.app$/.test(normalized));
 };
 
-const profileFields = (
-  user: {
-    phone?: string | null;
-    email?: string | null;
-    profile?: Profile | null;
-  },
-) => {
+const isRequestBasedProfile = (profile?: Profile | null): boolean =>
+  Boolean(
+    profile?.categories?.some((category) => {
+      const normalized = category.trim().toLowerCase();
+      return normalized === 'support based on request' || normalized === 'open to any';
+    }),
+  );
+
+const fixedHourlyRateForRequest = (
+  profile: Profile | null | undefined,
+  categoryLabel: string,
+): number | null => {
+  if (!profile || isRequestBasedProfile(profile)) return null;
+  if (!profile.categories?.length) return null;
+  const variants = new Set(
+    [categoryLabel, ...getCategoryMatchVariants(categoryLabel)].map((value) =>
+      value.trim().toLowerCase(),
+    ),
+  );
+  const categorySelected = profile.categories.some((category) =>
+    variants.has(category.trim().toLowerCase()),
+  );
+  if (!categorySelected) {
+    throw new AppError('This supporter does not offer the selected support type', 400);
+  }
+  const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(([category]) =>
+    variants.has(category.trim().toLowerCase()),
+  );
+  const rate = matched?.[1];
+  if (rate == null || !Number.isFinite(rate) || rate <= 0) {
+    throw new AppError('The selected support type does not have a valid hourly rate', 400);
+  }
+  return rate;
+};
+
+const profileFields = (user: {
+  phone?: string | null;
+  email?: string | null;
+  profile?: Profile | null;
+}) => {
   const profile = user.profile;
   const gallery = profile?.gallery ?? [];
   return {
@@ -321,7 +400,9 @@ const cancellationFields = (request: {
   cancelledAt?: Date | null;
   cancelledById?: number | null;
 }) => ({
-  cancellationFee: request.cancellationFee,
+  // Late-cancellation charges are no longer part of the product. Keep the
+  // response fields temporarily for older clients, but never expose a charge.
+  cancellationFee: 0,
   cancellationFeeReason: request.cancellationFeeReason ?? null,
   cancelledAt: request.cancelledAt?.toISOString() ?? null,
   cancelledById: request.cancelledById ?? null,
@@ -354,27 +435,14 @@ const normalizeOptionalText = (value?: string | null): string | null => {
   return normalized ? normalized : null;
 };
 
-const cancellationPreviewFields = (
-  request: {
-    status: RequestStatus;
-    fromDateTime: Date;
-    quotedHourlyRate?: number | null;
-  },
-) => {
-  const now = Date.now();
-  const startsAt = request.fromDateTime.getTime();
-  const applies =
-    request.status === RequestStatus.CONFIRMED &&
-    now >= startsAt - LATE_CANCELLATION_WINDOW_MS &&
-    now < startsAt;
-
-  return {
-    cancellationFeeApplies: applies,
-    cancellationFeePreview: applies
-      ? (request.quotedHourlyRate ?? 0)
-      : 0,
-  };
-};
+const cancellationPreviewFields = (_request: {
+  status: RequestStatus;
+  fromDateTime: Date;
+  quotedHourlyRate?: number | null;
+}) => ({
+  cancellationFeeApplies: false,
+  cancellationFeePreview: 0,
+});
 
 const normalizeDayKey = (value: string): string => value.trim().slice(0, 3).toUpperCase();
 
@@ -437,7 +505,10 @@ const minimumScheduledStart = (): Date => {
 };
 
 const requestFitsAvailability = (
-  profile: Pick<Profile, 'availableDays' | 'availableTimeRange' | 'weeklyAvailability'> | null | undefined,
+  profile:
+    | Pick<Profile, 'availableDays' | 'availableTimeRange' | 'weeklyAvailability'>
+    | null
+    | undefined,
   from: Date,
   to?: Date | null,
   timezoneOffsetMinutes = 0,
@@ -611,10 +682,7 @@ export class RequestService {
         senderId,
         receiverId: data.receiverId,
         status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
-        OR: [
-          { session: null },
-          { session: { is: { status: { not: SessionStatus.ENDED } } } },
-        ],
+        OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
       },
       select: { id: true },
     });
@@ -626,14 +694,10 @@ export class RequestService {
     const instantBooking = Boolean(data.instantBooking);
 
     if (!instantBooking && data.fromDateTime < minimumScheduledStart()) {
-      throw new AppError(
-        'Scheduled requests must start at least 15 minutes from now',
-        400,
-      );
+      throw new AppError('Scheduled requests must start at least 15 minutes from now', 400);
     }
 
     if (
-      !instantBooking &&
       !requestFitsAvailability(
         receiver.profile,
         data.fromDateTime,
@@ -661,6 +725,7 @@ export class RequestService {
     }
 
     const bookingFor = data.bookingFor === 'someone_else' ? 'someone_else' : 'self';
+    const fixedHourlyRate = fixedHourlyRateForRequest(receiver.profile, data.categoryLabel);
     const beneficiaryData =
       bookingFor === 'someone_else'
         ? {
@@ -694,6 +759,7 @@ export class RequestService {
         ...beneficiaryData,
         readyToPayTravelCharges: data.readyToPayTravelCharges ?? false,
         readyToPayTip: data.readyToPayTip ?? false,
+        quotedHourlyRate: fixedHourlyRate,
         status: RequestStatus.PENDING,
       },
     });
@@ -807,6 +873,7 @@ export class RequestService {
         ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
+        ...requestHistoryFields(req, userId),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
@@ -841,6 +908,7 @@ export class RequestService {
         ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
+        ...requestHistoryFields(req, userId),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
@@ -903,8 +971,7 @@ export class RequestService {
         const receiverDecliningPending =
           request.receiverId === userId && request.status === RequestStatus.PENDING;
         const senderRejectingQuote =
-          request.senderId === userId &&
-          request.status === RequestStatus.ACCEPTED_BY_RECEIVER;
+          request.senderId === userId && request.status === RequestStatus.ACCEPTED_BY_RECEIVER;
         if (!receiverDecliningPending && !senderRejectingQuote) {
           throw new AppError('You are not authorized to decline this request', 403);
         }
@@ -913,7 +980,10 @@ export class RequestService {
           if (request.receiverId !== userId) {
             throw new AppError('You are not authorized to accept this request', 403);
           }
-          if (hourlyRate == null || !Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+          if (
+            request.quotedHourlyRate == null &&
+            (hourlyRate == null || !Number.isFinite(hourlyRate) || hourlyRate <= 0)
+          ) {
             throw new AppError('Enter a valid hourly rate before accepting', 400);
           }
         } else if (request.status === RequestStatus.ACCEPTED_BY_RECEIVER) {
@@ -929,52 +999,46 @@ export class RequestService {
       }
     }
 
-    const finalSenderConfirmation =
+    const senderConfirmingQuote =
       status === 'confirmed' &&
       request.status === RequestStatus.ACCEPTED_BY_RECEIVER &&
       request.senderId === userId;
-    const otpProximity = finalSenderConfirmation
-      ? otpProximityForRequest(request)
-      : null;
-    const otpVal = finalSenderConfirmation && otpProximity?.ready
-      ? String(randomInt(1000, 10_000))
-      : null;
+    const receiverAcceptingFixedRate =
+      status === 'confirmed' &&
+      request.status === RequestStatus.PENDING &&
+      request.receiverId === userId &&
+      request.quotedHourlyRate != null &&
+      request.quotedHourlyRate > 0;
+    const finalConfirmation = senderConfirmingQuote || receiverAcceptingFixedRate;
+    const otpProximity = finalConfirmation ? otpProximityForRequest(request) : null;
+    const otpVal =
+      finalConfirmation && otpProximity?.ready ? String(randomInt(1000, 10_000)) : null;
     const nextStatus =
       status === 'confirmed'
-        ? finalSenderConfirmation
+        ? finalConfirmation
           ? RequestStatus.CONFIRMED
           : RequestStatus.ACCEPTED_BY_RECEIVER
         : mapStatusToBackend(status);
 
     const now = new Date();
-    const isLateCancellation =
-      status === 'cancelled' &&
-      request.status === RequestStatus.CONFIRMED &&
-      request.senderId === userId &&
-      now.getTime() >= request.fromDateTime.getTime() - LATE_CANCELLATION_WINDOW_MS &&
-      now.getTime() < request.fromDateTime.getTime();
-
-    const cancellationFee = isLateCancellation
-      ? (request.quotedHourlyRate ?? 0)
-      : 0;
     const normalizedCancellationReason = cancellationReason?.trim() || null;
-    const storedCancellationReason =
-      normalizedCancellationReason ?? (isLateCancellation ? LATE_CANCELLATION_REASON : null);
 
     const updatedRequest = await prisma.request.update({
       where: { id: requestId },
       data: {
         status: nextStatus,
         otp: otpVal,
-        ...(status === 'confirmed' && request.status === RequestStatus.PENDING
+        ...(status === 'confirmed' &&
+        request.status === RequestStatus.PENDING &&
+        request.quotedHourlyRate == null
           ? { quotedHourlyRate: hourlyRate }
           : {}),
-        ...(status === 'cancelled'
+        ...(status === 'cancelled' || status === 'declined'
           ? {
               cancelledAt: now,
               cancelledById: userId,
-              cancellationFee,
-              cancellationFeeReason: storedCancellationReason,
+              cancellationFee: 0,
+              cancellationFeeReason: normalizedCancellationReason,
             }
           : {}),
       },
@@ -1000,6 +1064,13 @@ export class RequestService {
         `${receiverName} quoted Rs ${updatedRequest.quotedHourlyRate}/hr for ${updatedRequest.categoryLabel}. Please accept or reject the quote.`,
         updatedRequest.receiverId,
       );
+    } else if (status === 'confirmed' && receiverAcceptingFixedRate) {
+      await NotificationService.createNotification(
+        updatedRequest.senderId,
+        'request_accepted',
+        `${receiverName} accepted your ${updatedRequest.categoryLabel} request at Rs ${updatedRequest.quotedHourlyRate}/hr.`,
+        updatedRequest.receiverId,
+      );
     } else if (status === 'confirmed') {
       await NotificationService.createNotification(
         updatedRequest.receiverId,
@@ -1019,20 +1090,6 @@ export class RequestService {
         `${senderName} cancelled your meet${reasonText}`,
         updatedRequest.senderId,
       );
-      if (cancellationFee > 0) {
-        await NotificationService.createNotification(
-          updatedRequest.senderId,
-          'payment_sent',
-          `you paid ${cancellationFee} late cancellation fee to ${receiverName}`,
-          updatedRequest.receiverId,
-        );
-        await NotificationService.createNotification(
-          updatedRequest.receiverId,
-          'payment_received',
-          `you received ${cancellationFee} late cancellation fee from ${senderName}`,
-          updatedRequest.senderId,
-        );
-      }
     } else if (status === 'declined') {
       const senderRejectedQuote = userId === updatedRequest.senderId;
       await NotificationService.createNotification(
@@ -1143,8 +1200,10 @@ export class RequestService {
       throw new AppError('You are not authorized to view messages for this request', 403);
     }
 
+    const cutoff = messageRetentionCutoff();
+    await deleteExpiredMessages();
     const messages = await prisma.message.findMany({
-      where: { requestId },
+      where: { requestId, createdAt: { gte: cutoff } },
       orderBy: { createdAt: 'asc' },
     });
 

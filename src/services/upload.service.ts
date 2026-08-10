@@ -185,7 +185,7 @@ export class UploadService {
     if (
       normalized.startsWith('../') ||
       normalized.includes('/../') ||
-      !['avatars/', 'gallery/', 'profiles/', 'uploads/'].some((prefix) =>
+      !['avatars/', 'gallery/', 'profiles/', 'uploads/', 'users/'].some((prefix) =>
         normalized.startsWith(prefix),
       )
     ) {

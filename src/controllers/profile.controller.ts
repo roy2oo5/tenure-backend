@@ -30,10 +30,6 @@ function normalizedGender(value: string | null): string {
   return normalized;
 }
 
-function normalizedName(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-}
-
 async function profileWithTenureId(userId: number, profile: object) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -86,6 +82,7 @@ export class ProfileController {
             profile: {
               aadhaarVerified: true,
               aadhaarMasked: profile.aadhaarMasked,
+              aadhaarName: profile.aadhaarName,
             },
             updatedFields: [],
             nameChoice: null,
@@ -103,16 +100,23 @@ export class ProfileController {
         : claims.maskedAadhaar.trim();
       const dobChanged = !profile.dob || profile.dob.getTime() !== aadhaarDob.getTime();
       const genderChanged = normalizedGender(profile.gender) !== normalizedGender(claims.gender);
-      const nameChoiceRequired = normalizedName(profile.fullName) !== normalizedName(claims.name);
+      const verifiedGender = (() => {
+        const value = normalizedGender(claims.gender);
+        if (value === 'male') return 'Male';
+        if (value === 'female') return 'Female';
+        if (value === 'other') return 'Other';
+        return claims.gender.trim();
+      })();
       const [updatedProfile] = await prisma.$transaction([
         prisma.profile.update({
           where: { userId: req.user.id },
           data: {
             aadhaarVerified: true,
             aadhaarMasked: masked,
+            aadhaarName: claims.name.trim(),
             aadhaarAddress: claims.address,
             ...(dobChanged ? { dob: aadhaarDob } : {}),
-            ...(genderChanged ? { gender: claims.gender.trim() } : {}),
+            ...(genderChanged ? { gender: verifiedGender } : {}),
           },
         }),
         prisma.aadhaarCredentialVerification.upsert({
@@ -131,16 +135,14 @@ export class ProfileController {
           profile: {
             aadhaarVerified: updatedProfile.aadhaarVerified,
             aadhaarMasked: updatedProfile.aadhaarMasked,
+            aadhaarName: updatedProfile.aadhaarName,
             aadhaarAddress: updatedProfile.aadhaarAddress,
             dob: updatedProfile.dob,
             gender: updatedProfile.gender,
           },
           updatedFields: [dobChanged ? 'dob' : null, genderChanged ? 'gender' : null]
             .filter((field): field is string => field !== null),
-          nameChoice: nameChoiceRequired ? {
-            currentName: profile.fullName,
-            aadhaarName: claims.name,
-          } : null,
+          nameChoice: null,
           message: 'Aadhaar verified successfully.',
         },
       });

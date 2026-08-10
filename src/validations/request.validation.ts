@@ -44,10 +44,7 @@ export const createRequestSchema = z.object({
         .optional()
         .default(0),
       instantBooking: z.boolean().optional().default(false),
-      responseTime: z
-        .number()
-        .int('Response time must be 10, 20, or 30 minutes')
-        .optional(),
+      responseTime: z.number().int('Response time must be 10, 20, or 30 minutes').optional(),
       responseDeadlineAt: z.preprocess(
         (arg) => (typeof arg === 'string' ? (arg.trim() ? new Date(arg) : null) : arg),
         z
@@ -78,6 +75,23 @@ export const createRequestSchema = z.object({
           path: ['toDateTime'],
           message: 'End date/time must be after start date/time',
         });
+      }
+      if (!body.toDateTime) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['toDateTime'],
+          message: 'Support duration is required',
+        });
+      } else {
+        const durationMinutes =
+          (body.toDateTime.getTime() - body.fromDateTime.getTime()) / 60000;
+        if (![30, 45, 60, 75, 90, 105, 120].includes(durationMinutes)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['toDateTime'],
+            message: 'Support duration must be between 30 minutes and 2 hours',
+          });
+        }
       }
       if (
         body.instantBooking &&
