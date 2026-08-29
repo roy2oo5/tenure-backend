@@ -10,6 +10,7 @@ import {
   registerSchema,
   loginSchema,
   updateUserSchema,
+  refreshSessionSchema,
   phoneAuthSchema,
 } from '../validations/user.validation';
 import { createProfileSchema } from '../validations/profile.validation';
@@ -251,6 +252,7 @@ router.post('/login', validate(loginSchema), UserController.login);
  *         description: Invalid phone number.
  */
 router.post('/phone-auth', validate(phoneAuthSchema), UserController.phoneAuth);
+router.post('/refresh-session', validate(refreshSessionSchema), UserController.refreshSession);
 router.get('/phone-login-status', UserController.phoneLoginStatus);
 
 /**

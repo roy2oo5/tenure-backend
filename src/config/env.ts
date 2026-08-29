@@ -21,12 +21,15 @@ const envSchema = z.object({
   MSG91_AUTHKEY: z.string().optional(),
   MSG91_WIDGET_ID: z.string().optional(),
   MSG91_WIDGET_TOKEN_AUTH: z.string().optional(),
+  MOCK_OTP_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform(value => value === 'true'),
   FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
-  TWILIO_ACCOUNT_SID: z.string().optional(),
-  TWILIO_API_KEY: z.string().optional(),
-  TWILIO_API_SECRET: z.string().optional(),
-  TWILIO_TWIML_APP_SID: z.string().optional(),
+  TURN_HOST: z.string().optional(),
+  TURN_SHARED_SECRET: z.string().min(32).optional(),
+  TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -1,30 +1,22 @@
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database';
-import { env } from '../config/env';
 import { AppError } from '../utils/app-error';
-import { Role, User } from '@prisma/client';
+import { User } from '@prisma/client';
 import { disconnectUserForNewLogin, sendGlobalToAll } from './websocket.service';
+import { AuthSessionService } from './auth-session.service';
+import { enforceAgeRestriction } from '../utils/age-restriction';
 
 export type UserWithoutPassword = Omit<User, 'password'>;
 
 export interface AuthResponse {
   user: UserWithoutPassword;
   token: string;
+  refreshToken?: string;
 }
 
 const formatUser = (user: User): UserWithoutPassword => {
   const { password: _, ...userWithoutPassword } = user;
   return userWithoutPassword;
-};
-
-const signToken = (
-  id: number,
-  email: string | null,
-  role: Role,
-  authVersion: number,
-): string => {
-  return jwt.sign({ id, email, role, authVersion }, env.JWT_SECRET);
 };
 
 const normalizePhone = (phone: string): string => {
@@ -39,7 +31,7 @@ const normalizePhone = (phone: string): string => {
 };
 
 export class UserService {
-  public static async register(data: Prisma.UserCreateInput): Promise<AuthResponse> {
+  public static async register(data: Prisma.UserCreateInput, deviceId: string): Promise<AuthResponse> {
     if (!data.email || !data.password) {
       throw new AppError('Please provide email and password', 400);
     }
@@ -74,11 +66,11 @@ export class UserService {
       },
     });
 
-    const token = signToken(newUser.id, newUser.email, newUser.role, newUser.authVersion);
+    const credentials = await AuthSessionService.create(newUser, deviceId);
 
     return {
       user: formatUser(newUser),
-      token,
+      ...credentials,
     };
   }
 
@@ -97,6 +89,14 @@ export class UserService {
     });
 
     if (existingUser) {
+      const profile = await prisma.profile.findUnique({
+        where: { userId: existingUser.id },
+        select: { dob: true },
+      });
+      // A missing profile is a first-time registration and must be allowed to
+      // continue to DOB collection. Existing profiles are checked on every login.
+      if (profile) enforceAgeRestriction(profile.dob);
+
       const loggedInUser = await prisma.user.update({
         where: { id: existingUser.id },
         data: {
@@ -106,16 +106,12 @@ export class UserService {
           activeDeviceId: deviceId ?? null,
         },
       });
-      const token = signToken(
-        loggedInUser.id,
-        loggedInUser.email,
-        loggedInUser.role,
-        loggedInUser.authVersion,
-      );
+      if (!deviceId) throw new AppError('A valid device ID is required', 400);
+      const credentials = await AuthSessionService.create(loggedInUser, deviceId);
       disconnectUserForNewLogin(existingUser.id);
       return {
         user: formatUser(loggedInUser),
-        token,
+        ...credentials,
       };
     }
 
@@ -134,15 +130,16 @@ export class UserService {
       },
     });
 
-    const token = signToken(newUser.id, newUser.email, newUser.role, newUser.authVersion);
+    if (!deviceId) throw new AppError('A valid device ID is required', 400);
+    const credentials = await AuthSessionService.create(newUser, deviceId);
 
     return {
       user: formatUser(newUser),
-      token,
+      ...credentials,
     };
   }
 
-  public static async login(data: Prisma.UserWhereInput): Promise<AuthResponse> {
+  public static async login(data: Prisma.UserWhereInput, deviceId: string): Promise<AuthResponse> {
     if (!data.email || !data.password) {
       throw new AppError('Please provide email and password', 400);
     }
@@ -155,6 +152,12 @@ export class UserService {
       throw new AppError('Incorrect email or password', 401);
     }
 
+    const profile = await prisma.profile.findUnique({
+      where: { userId: user.id },
+      select: { dob: true },
+    });
+    if (profile) enforceAgeRestriction(profile.dob);
+
     if (!user.isActive) {
       await prisma.user.update({
         where: { id: user.id },
@@ -163,11 +166,11 @@ export class UserService {
       user.isActive = true;
     }
 
-    const token = signToken(user.id, user.email, user.role, user.authVersion);
+    const credentials = await AuthSessionService.create(user, deviceId);
 
     return {
       user: formatUser(user),
-      token,
+      ...credentials,
     };
   }
 
@@ -207,6 +210,7 @@ export class UserService {
       where: { userId, instantAvailable: true },
       data: {
         instantAvailable: false,
+        readyNowEnabled: false,
         instantAvailableUntil: null,
         instantCategories: [],
         instantNote: null,

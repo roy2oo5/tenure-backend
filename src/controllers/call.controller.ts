@@ -1,10 +1,45 @@
 import { Request, Response, NextFunction } from 'express';
-import twilio from 'twilio';
 import { CallService } from '../services/call.service';
 import { AppError } from '../utils/app-error';
 import { env } from '../config/env';
+import { createHmac } from 'crypto';
 
 export class CallController {
+  public static getTurnCredentials(req: Request, res: Response, next: NextFunction): void {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      if (!env.TURN_HOST || !env.TURN_SHARED_SECRET) {
+        return next(new AppError('TURN is not configured.', 503));
+      }
+
+      const expiresAt = Math.floor(Date.now() / 1000) + env.TURN_CREDENTIAL_TTL_SECONDS;
+      const username = `${expiresAt}:${req.user.id}`;
+      const credential = createHmac('sha1', env.TURN_SHARED_SECRET)
+        .update(username)
+        .digest('base64');
+      res.status(200).json({
+        status: 'success',
+        data: {
+          expiresAt,
+          iceServers: [
+            { urls: [`stun:${env.TURN_HOST}:3478`] },
+            {
+              urls: [
+                `turn:${env.TURN_HOST}:3478?transport=udp`,
+                `turn:${env.TURN_HOST}:3478?transport=tcp`,
+                `turns:${env.TURN_HOST}:5349?transport=tcp`,
+              ],
+              username,
+              credential,
+            },
+          ],
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async getLimit(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) {
@@ -41,71 +76,4 @@ export class CallController {
     }
   }
 
-  /**
-   * Step A: Access Token Endpoint
-   * Issues a Twilio Voice AccessToken JWT to frontend/mobile clients to register with Twilio.
-   */
-  public static getTwilioToken(req: Request, res: Response, next: NextFunction): void {
-    try {
-      const accountSid = env.TWILIO_ACCOUNT_SID;
-      const apiKey = env.TWILIO_API_KEY;
-      const apiSecret = env.TWILIO_API_SECRET;
-      const twimlAppSid = env.TWILIO_TWIML_APP_SID;
-
-      if (!accountSid || !apiKey || !apiSecret || !twimlAppSid) {
-        return next(
-          new AppError(
-            'Twilio Voice credentials (TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWILIO_TWIML_APP_SID) are not fully configured in environment variables.',
-            500
-          )
-        );
-      }
-
-      const identity =
-        (req.query.identity as string) ||
-        (req.user ? `user_${req.user.id}` : 'user_anonymous');
-
-      const AccessToken = twilio.jwt.AccessToken;
-      const VoiceGrant = AccessToken.VoiceGrant;
-
-      const voiceGrant = new VoiceGrant({
-        outgoingApplicationSid: twimlAppSid,
-        incomingAllow: true,
-      });
-
-      const token = new AccessToken(accountSid, apiKey, apiSecret, { identity });
-      token.addGrant(voiceGrant);
-
-      res.status(200).json({
-        status: 'success',
-        data: {
-          token: token.toJwt(),
-          identity,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Step B: TwiML Webhook Endpoint
-   * Twilio hits this HTTP endpoint when Client A dials Client B to get TwiML instructions.
-   */
-  public static twilioVoiceWebhook(req: Request, res: Response): void {
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-    const twiml = new VoiceResponse();
-
-    const targetUser = req.body?.To || req.query?.To;
-
-    if (targetUser) {
-      const dial = twiml.dial();
-      dial.client(targetUser);
-    } else {
-      twiml.say({ voice: 'alice' }, 'Thank you for calling TenureMate.');
-    }
-
-    res.type('text/xml');
-    res.status(200).send(twiml.toString());
-  }
 }

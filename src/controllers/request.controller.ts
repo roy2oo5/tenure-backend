@@ -62,7 +62,13 @@ export class RequestController {
         return next(new AppError('You are not authenticated.', 401));
       }
       const id = parseInt(req.params.id, 10);
-      const messages = await RequestService.getRequestMessages(req.user.id, id);
+      const rawLimit = Number.parseInt(req.query.limit?.toString() ?? '', 10);
+      const limit = Number.isFinite(rawLimit) ? rawLimit : undefined;
+      const before = req.query.before?.toString();
+      const messages = await RequestService.getRequestMessages(req.user.id, id, {
+        limit,
+        before,
+      });
       res.status(200).json({
         status: 'success',
         data: { messages },
@@ -82,7 +88,7 @@ export class RequestController {
         return next(new AppError('You are not authenticated.', 401));
       }
       const id = parseInt(req.params.id, 10);
-      const messageId = parseInt(req.params.messageId, 10);
+      const messageId = req.params.messageId;
       await RequestService.deleteRequestMessage(req.user.id, id, messageId);
       res.status(200).json({
         status: 'success',

@@ -6,6 +6,7 @@ import notificationRoutes from './notification.routes';
 import reportRoutes from './report.routes';
 import categoryRoutes from './category.routes';
 import callRoutes from './call.routes';
+import { getAppStatus } from '../services/maintenance.service';
 
 const router = Router();
 
@@ -16,6 +17,14 @@ router.get('/health', (_req, res) => {
     message: 'Server is healthy',
     timestamp: new Date().toISOString(),
   });
+});
+
+router.get('/app-status', async (_req, res, next) => {
+  try {
+    res.status(200).json({ status: 'success', data: await getAppStatus() });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Register sub-routers

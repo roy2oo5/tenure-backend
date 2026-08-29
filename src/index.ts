@@ -5,6 +5,8 @@ import { logger } from './utils/logger';
 import { initWebSocket } from './services/websocket.service';
 import { seedCategories } from './utils/seed';
 import { startMessageRetentionCleanup } from './services/message-retention.service';
+import { startSessionAutoPauseScheduler } from './services/session.service';
+import { startReadyNowExpirationScheduler } from './services/request-expiration.service';
 
 // Standard Uncaught Exception handler
 process.on('uncaughtException', (err) => {
@@ -29,6 +31,8 @@ const boot = async () => {
   });
   initWebSocket(server);
   startMessageRetentionCleanup();
+  startSessionAutoPauseScheduler();
+  startReadyNowExpirationScheduler();
 };
 
 boot();

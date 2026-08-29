@@ -10,6 +10,7 @@ import diditWebhookRoutes from './routes/didit-webhook.routes';
 import { errorHandler } from './middlewares/error.middleware';
 import { AppError } from './utils/app-error';
 import { logger } from './utils/logger';
+import { enforceMaintenanceMode } from './middlewares/maintenance.middleware';
 
 const app = express();
 
@@ -41,7 +42,7 @@ app.use(
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Bind API root path
-app.use('/api', routes);
+app.use('/api', enforceMaintenanceMode, routes);
 
 // Serve uploads statically (for local fallback storage)
 app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));

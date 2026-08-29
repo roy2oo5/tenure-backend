@@ -24,6 +24,7 @@ vi.mock('@/config/database', () => ({
     },
     profile: {
       findUnique: vi.fn(),
+      updateMany: vi.fn(),
     },
     user: {
       findUnique: vi.fn(),
@@ -38,11 +39,14 @@ vi.mock('@/config/database', () => ({
     block: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    $queryRaw: vi.fn(),
+    $transaction: vi.fn(async (callback: any) => callback(prisma)),
   },
 }));
 
 describe('RequestService', () => {
   beforeEach(() => {
+    (prisma.$transaction as any).mockImplementation(async (callback: any) => callback(prisma));
     (prisma.block.findFirst as any).mockResolvedValue(null);
     (prisma.request.findFirst as any).mockResolvedValue(null);
     (prisma.request.count as any).mockResolvedValue(0);
@@ -51,6 +55,7 @@ describe('RequestService', () => {
       dob: new Date('1995-01-01'),
       isMinor: false,
     });
+    (prisma.profile.updateMany as any).mockResolvedValue({ count: 0 });
   });
 
   afterEach(() => {
@@ -793,7 +798,7 @@ describe('RequestService', () => {
       );
     });
 
-    it('should mark request as waiting for sender confirmation when receiver accepts', async () => {
+    it('should require sender confirmation even when receiver accepts a fixed rate', async () => {
       const mockRequest = {
         id: 101,
         senderId: 1,
@@ -805,6 +810,7 @@ describe('RequestService', () => {
         toDateTime: new Date('2027-06-20T12:00:00.000Z'),
         message: 'Let us study together',
         status: RequestStatus.PENDING,
+        quotedHourlyRate: 275,
       };
 
       const mockUpdated = {
@@ -835,14 +841,13 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(2, 101, 'confirmed', undefined, 275);
+      const result = await RequestService.updateRequestStatus(2, 101, 'confirmed');
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
         data: {
           status: RequestStatus.ACCEPTED_BY_RECEIVER,
           otp: null,
-          quotedHourlyRate: 275,
         },
         include: {
           sender: { include: { profile: true } },
@@ -920,6 +925,68 @@ describe('RequestService', () => {
       expect(result.status).toBe('confirmed');
       expect(result.direction).toBe('sent');
       expect(result.otp).toBeNull();
+    });
+
+    it('should auto-cancel a reciprocal request for the same meeting date', async () => {
+      const meetingDate = new Date('2027-06-20T10:00:00.000Z');
+      const request = {
+        id: 101,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: meetingDate,
+        toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+        timezoneOffsetMinutes: 330,
+        message: '',
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        quotedHourlyRate: 275,
+      };
+      const confirmed = {
+        ...request,
+        status: RequestStatus.CONFIRMED,
+        otp: null,
+        createdAt: new Date(),
+        sender: {
+          id: 1,
+          name: 'Person A',
+          tenureId: 'TN111',
+          profile: { fullName: 'Person A', profilePhoto: '' },
+        },
+        receiver: {
+          id: 2,
+          name: 'Person B',
+          tenureId: 'TN222',
+          profile: { fullName: 'Person B', profilePhoto: '' },
+        },
+      };
+
+      (prisma.request.findUnique as any)
+        .mockResolvedValueOnce(request)
+        .mockResolvedValueOnce({ status: RequestStatus.ACCEPTED_BY_RECEIVER });
+      (prisma.request.update as any).mockResolvedValue(confirmed);
+
+      await RequestService.updateRequestStatus(1, 101, 'confirmed');
+
+      const firstAutoCancellation = (prisma.request.updateMany as any).mock.calls[0][0];
+      expect(firstAutoCancellation.where).toMatchObject({
+        id: { not: 101 },
+        status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+        OR: [
+          { senderId: 1 },
+          { senderId: 2, receiverId: 1 },
+        ],
+      });
+      expect(firstAutoCancellation.where.fromDateTime).toEqual({
+        gte: new Date('2027-06-19T18:30:00.000Z'),
+        lt: new Date('2027-06-20T18:30:00.000Z'),
+      });
+      expect(firstAutoCancellation.data).toMatchObject({
+        status: RequestStatus.CANCELLED,
+        otp: null,
+        cancellationFeeReason: 'Auto Cancelled',
+      });
     });
 
     it('should not charge a fee when sender cancels within 1 hour of start', async () => {
@@ -1036,6 +1103,7 @@ describe('RequestService', () => {
         id: 101,
         senderId: 1,
         receiverId: 2,
+        status: RequestStatus.CONFIRMED,
       };
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
@@ -1050,11 +1118,14 @@ describe('RequestService', () => {
         id: 101,
         senderId: 1,
         receiverId: 2,
+        status: RequestStatus.CONFIRMED,
       };
 
       const mockMessages = [
         {
           id: 401,
+          clientMessageId: '11111111-1111-4111-8111-111111111111',
+          isDeleted: false,
           requestId: 101,
           senderId: 1,
           receiverId: 2,
@@ -1066,6 +1137,8 @@ describe('RequestService', () => {
         },
         {
           id: 402,
+          clientMessageId: '22222222-2222-4222-8222-222222222222',
+          isDeleted: false,
           requestId: 101,
           senderId: 2,
           receiverId: 1,
@@ -1078,7 +1151,8 @@ describe('RequestService', () => {
       ];
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
-      (prisma.message.findMany as any).mockResolvedValue(mockMessages);
+      // Prisma returns the newest records first for bounded pagination.
+      (prisma.message.findMany as any).mockResolvedValue([...mockMessages].reverse());
 
       const result = await RequestService.getRequestMessages(1, 101);
 
@@ -1086,20 +1160,35 @@ describe('RequestService', () => {
       expect(prisma.message.findMany).toHaveBeenCalledWith({
         where: {
           requestId: 101,
-          createdAt: { gte: expect.any(Date) },
+          expiresAt: { gt: expect.any(Date) },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
       });
       expect(prisma.message.deleteMany).toHaveBeenCalledWith({
-        where: { createdAt: { lt: expect.any(Date) } },
+        where: { expiresAt: { lte: expect.any(Date) } },
       });
       expect(result.length).toBe(2);
-      expect(result[0].id).toBe(401);
+      expect(result[0].id).toBe('11111111-1111-4111-8111-111111111111');
       expect(result[0].sender).toBe('me');
       expect(result[0].text).toBe('Hello mate!');
-      expect(result[1].id).toBe(402);
+      expect(result[1].id).toBe('22222222-2222-4222-8222-222222222222');
       expect(result[1].sender).toBe('them');
       expect(result[1].text).toBe('Hi there!');
+    });
+
+    it('should keep chat history locked until final confirmation', async () => {
+      (prisma.request.findUnique as any).mockResolvedValue({
+        id: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+      });
+
+      await expect(RequestService.getRequestMessages(1, 101)).rejects.toThrow(
+        'Chat is available after both users confirm the request',
+      );
+      expect(prisma.message.findMany).not.toHaveBeenCalled();
     });
   });
 });

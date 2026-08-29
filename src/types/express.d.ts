@@ -9,6 +9,8 @@ declare global {
         role: Role;
         name: string | null;
       };
+      authSessionId?: string;
+      authDeviceId?: string;
     }
   }
 }

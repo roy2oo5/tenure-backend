@@ -1,7 +1,8 @@
 import { IncomingMessage, Server as HttpServer } from 'http';
+import { scheduleMessageExpiration } from './message-retention.service';
 import { WebSocketServer, WebSocket } from 'ws';
 import { CallStatus, RequestStatus } from '@prisma/client';
-import { randomInt } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import url from 'url';
 import { env } from '../config/env';
@@ -10,6 +11,14 @@ import { logger } from '../utils/logger';
 import { sendPushNotification } from '../config/firebase';
 import { CallService } from './call.service';
 import { otpProximityForRequest } from '../utils/otp-proximity';
+import {
+  DeleteMessageInput,
+  MessageAckInput,
+  RealtimeMessageService,
+  SendMessageInput,
+} from './realtime-message.service';
+import { getAppStatus } from './maintenance.service';
+import { CallSignal, callSignalSchema } from '../types/call-signaling';
 
 // Store active chat connections: map of userId -> open chat sockets
 const connections = new Map<number, Set<WebSocket>>();
@@ -17,58 +26,21 @@ const chatRequestIds = new WeakMap<WebSocket, number>();
 
 // Store active global connections: map of userId -> Set of WebSockets
 const globalConnections = new Map<number, Set<WebSocket>>();
+// Socket IDs make connection replacement/debugging explicit while retaining
+// support for the brief overlap that occurs during mobile network handover.
+const globalSocketIds = new Map<number, Set<string>>();
+const socketIds = new WeakMap<WebSocket, string>();
+const activeCallsByUser = new Map<number, number>();
 
-const NEARBY_SUPPORTER_RADIUS_KM = 50;
-
-function distanceKm(
-  fromLatitude: number,
-  fromLongitude: number,
-  toLatitude: number,
-  toLongitude: number,
-): number {
-  const earthRadiusKm = 6371;
-  const radians = (degrees: number) => (degrees * Math.PI) / 180;
-  const latitudeDelta = radians(toLatitude - fromLatitude);
-  const longitudeDelta = radians(toLongitude - fromLongitude);
-  const fromLatitudeRadians = radians(fromLatitude);
-  const toLatitudeRadians = radians(toLatitude);
-  const a =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(fromLatitudeRadians) *
-      Math.cos(toLatitudeRadians) *
-      Math.sin(longitudeDelta / 2) ** 2;
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-async function notifyNearbySupportersChanged(loggedInUserId: number): Promise<void> {
+export async function notifyNearbySupportersChanged(loggedInUserId: number): Promise<void> {
   const recipientIds = [...globalConnections.keys()].filter((id) => id !== loggedInUserId);
   if (!recipientIds.length) return;
 
-  const profiles = await prisma.profile.findMany({
-    where: { userId: { in: [loggedInUserId, ...recipientIds] } },
-    select: { userId: true, latitude: true, longitude: true },
-  });
-  const loginProfile = profiles.find((profile) => profile.userId === loggedInUserId);
-  if (loginProfile?.latitude == null || loginProfile.longitude == null) return;
-
-  for (const profile of profiles) {
-    if (
-      profile.userId === loggedInUserId ||
-      profile.latitude == null ||
-      profile.longitude == null
-    ) {
-      continue;
-    }
-    if (
-      distanceKm(
-        loginProfile.latitude,
-        loginProfile.longitude,
-        profile.latitude,
-        profile.longitude,
-      ) <= NEARBY_SUPPORTER_RADIUS_KM
-    ) {
-      sendGlobalToUser(profile.userId, { event: 'nearby_supporters_changed' });
-    }
+  // Notify every connected viewer so both radius entry and radius exit are
+  // reflected immediately. Filtering still happens against the two users'
+  // current profile coordinates on the refreshed discovery response.
+  for (const recipientId of recipientIds) {
+    sendGlobalToUser(recipientId, { event: 'nearby_supporters_changed' });
   }
 }
 
@@ -90,6 +62,24 @@ export function disconnectUserForNewLogin(userId: number): void {
 export function initWebSocket(server: HttpServer) {
   const wss = new WebSocketServer({ noServer: true });
 
+  const maintenanceTimer = setInterval(() => {
+    getAppStatus(true)
+      .then(status => {
+        if (!status.maintenanceMode) return;
+        for (const client of wss.clients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              event: 'maintenance_mode',
+              message: status.maintenanceMessage,
+            }));
+          }
+          client.close(1013, 'Service under maintenance');
+        }
+      })
+      .catch(error => logger.error(`Maintenance WebSocket check failed: ${error}`));
+  }, 5_000);
+  maintenanceTimer.unref();
+
   server.on('upgrade', (request, socket, head) => {
     const parsed = url.parse(request.url || '');
     const pathname = parsed.pathname;
@@ -110,11 +100,21 @@ export function initWebSocket(server: HttpServer) {
 
   wss.on('connection', async (ws: WebSocket, request: IncomingMessage) => {
     try {
+      const appStatus = await getAppStatus();
+      if (appStatus.maintenanceMode) {
+        ws.send(JSON.stringify({
+          event: 'maintenance_mode',
+          message: appStatus.maintenanceMessage,
+        }));
+        ws.close(1013, 'Service under maintenance');
+        return;
+      }
       const parsedUrl = url.parse(request.url || '', true);
       const token = parsedUrl.query.token as string;
+      const deviceId = parsedUrl.query.deviceId as string;
       const pathname = parsedUrl.pathname;
 
-      if (!token) {
+      if (!token || !deviceId) {
         ws.send(JSON.stringify({ error: 'Missing token' }));
         ws.close(4001, 'Unauthorized');
         return;
@@ -124,14 +124,14 @@ export function initWebSocket(server: HttpServer) {
       let decoded: any;
       try {
         decoded = jwt.verify(token, env.JWT_SECRET);
-      } catch (err) {
+      } catch {
         ws.send(JSON.stringify({ error: 'Invalid authentication token' }));
         ws.close(4002, 'Unauthorized');
         return;
       }
 
       const userId = decoded.id;
-      if (!userId) {
+      if (!userId || !decoded.sid || decoded.did !== deviceId) {
         ws.send(JSON.stringify({ error: 'Invalid token payload' }));
         ws.close(4003, 'Unauthorized');
         return;
@@ -141,9 +141,17 @@ export function initWebSocket(server: HttpServer) {
         where: { id: userId },
         select: { authVersion: true, isActive: true },
       });
+      const authSession = await prisma.authSession.findUnique({
+        where: { id: decoded.sid },
+      });
       if (
         !authenticatedUser?.isActive ||
-        decoded.authVersion !== authenticatedUser.authVersion
+        decoded.authVersion !== authenticatedUser.authVersion ||
+        !authSession ||
+        authSession.userId !== userId ||
+        authSession.deviceId !== deviceId ||
+        authSession.revokedAt ||
+        authSession.expiresAt <= new Date()
       ) {
         ws.send(JSON.stringify({ event: 'forced_logout' }));
         ws.close(4004, 'Logged in on another device');
@@ -156,6 +164,10 @@ export function initWebSocket(server: HttpServer) {
           globalConnections.set(userId, new Set<WebSocket>());
         }
         globalConnections.get(userId)!.add(ws);
+        const socketId = randomUUID();
+        socketIds.set(ws, socketId);
+        if (!globalSocketIds.has(userId)) globalSocketIds.set(userId, new Set<string>());
+        globalSocketIds.get(userId)!.add(socketId);
         logger.info(`WebSocket global client connected: user=${userId}`);
         notifyNearbySupportersChanged(userId).catch((error) =>
           logger.error(`Could not notify nearby supporters after login: ${error}`),
@@ -168,6 +180,12 @@ export function initWebSocket(server: HttpServer) {
 
             if (data.type === 'ping') {
               ws.send(JSON.stringify({ type: 'pong' }));
+              return;
+            }
+
+            const typedCall = callSignalSchema.safeParse(data);
+            if (typedCall.success) {
+              await handleTypedCallMessage(ws, userId, typedCall.data);
               return;
             }
 
@@ -232,6 +250,13 @@ export function initWebSocket(server: HttpServer) {
         return;
       }
 
+      // Chat is available only after both participants have confirmed the request.
+      if (meetRequest.status !== RequestStatus.CONFIRMED) {
+        ws.send(JSON.stringify({ error: 'Chat is available after both users confirm the request' }));
+        ws.close(4003, 'Request not confirmed');
+        return;
+      }
+
       // Verify block relation
       const block = await prisma.block.findFirst({
         where: {
@@ -253,12 +278,59 @@ export function initWebSocket(server: HttpServer) {
       }
       connections.get(userId)!.add(ws);
       chatRequestIds.set(ws, requestId);
+      RealtimeMessageService.register(userId, String(requestId), ws);
+      await RealtimeMessageService.deliverPending(userId, String(requestId), ws);
       logger.info(`WebSocket client connected: user=${userId}, request=${requestId}`);
 
       ws.on('message', async (messageData: string) => {
         try {
           const data = JSON.parse(messageData);
           const { type = 'text', content, mediaUrl, voiceDuration } = data;
+
+          if (data.event === 'send_message') {
+            const expectedRecipient = meetRequest.senderId === userId
+              ? meetRequest.receiverId
+              : meetRequest.senderId;
+            if (String(data.recipientId) !== String(expectedRecipient)) {
+              ws.send(JSON.stringify({ event: 'send_failed', messageId: data.messageId, error: 'Invalid recipient' }));
+              return;
+            }
+            try {
+              await RealtimeMessageService.handleSendMessage(
+                userId,
+                requestId,
+                ws,
+                data as SendMessageInput,
+              );
+            } catch (error: unknown) {
+              ws.send(JSON.stringify({
+                event: 'send_failed',
+                messageId: data.messageId,
+                error: error instanceof Error ? error.message : 'Message delivery failed',
+              }));
+            }
+            return;
+          }
+          const id = socketIds.get(ws);
+          if (id) {
+            const ids = globalSocketIds.get(userId);
+            ids?.delete(id);
+            if (ids?.size === 0) globalSocketIds.delete(userId);
+          }
+
+          if (data.event === 'msg_acknowledged') {
+            await RealtimeMessageService.handleMessageAck(userId, data as MessageAckInput);
+            return;
+          }
+
+          if (data.event === 'delete_for_everyone') {
+            await RealtimeMessageService.handleDeleteForEveryone(userId, data as DeleteMessageInput);
+            ws.send(JSON.stringify({
+              event: 'message_control_event',
+              control: { event: 'delete_message', messageId: data.messageId },
+            }));
+            return;
+          }
 
           if (type === 'ping' || type === 'pong') {
             return;
@@ -379,6 +451,7 @@ export function initWebSocket(server: HttpServer) {
               voiceDuration: voiceDuration ? parseInt(voiceDuration, 10) : null,
             },
           });
+          scheduleMessageExpiration(message.expiresAt);
 
           const formattedMessage = {
             id: message.id,
@@ -472,6 +545,7 @@ export function initWebSocket(server: HttpServer) {
       });
 
       ws.on('close', () => {
+        RealtimeMessageService.unregister(userId, String(requestId), ws);
         const userSockets = connections.get(userId);
         if (userSockets) {
           userSockets.delete(ws);
@@ -542,6 +616,183 @@ export function sendGlobalToAll(data: any): number {
     }
   }
   return sent;
+}
+
+async function handleTypedCallMessage(
+  ws: WebSocket,
+  userId: number,
+  data: CallSignal,
+): Promise<void> {
+  if (data.targetId === userId) {
+    ws.send(JSON.stringify({ event: 'call:reject', reason: 'invalid_target' }));
+    return;
+  }
+
+  if (data.type === 'call:initiate') {
+    const targetUser = await prisma.user.findUnique({
+      where: { id: data.targetId },
+      select: { id: true, fcmToken: true },
+    });
+    if (!targetUser) {
+      ws.send(JSON.stringify({ event: 'call:reject', reason: 'not_found' }));
+      return;
+    }
+    const blocked = await prisma.block.findFirst({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: data.targetId },
+          { blockerId: data.targetId, blockedId: userId },
+        ],
+      },
+      select: { id: true },
+    });
+    if (blocked) {
+      ws.send(JSON.stringify({ event: 'call:reject', reason: 'blocked' }));
+      return;
+    }
+
+    const usage = await CallService.getDailyPairUsage(userId, data.targetId);
+    if (usage.remainingSeconds <= 0) {
+      ws.send(JSON.stringify({ event: 'call:reject', reason: 'daily_limit_exceeded', ...usage }));
+      return;
+    }
+
+    const busy = activeCallsByUser.has(userId) || activeCallsByUser.has(data.targetId);
+    const call = await prisma.call.create({
+      data: {
+        callerId: userId,
+        receiverId: data.targetId,
+        status: busy ? CallStatus.BUSY : CallStatus.RINGING,
+        endedAt: busy ? new Date() : undefined,
+        endReason: busy ? 'user_busy' : undefined,
+      },
+    });
+    if (busy) {
+      ws.send(JSON.stringify({ event: 'call:busy', callId: call.id, fromUserId: data.targetId }));
+      return;
+    }
+
+    activeCallsByUser.set(userId, call.id);
+    activeCallsByUser.set(data.targetId, call.id);
+    const [profile, caller] = await Promise.all([
+      prisma.profile.findUnique({ where: { userId }, select: { fullName: true, profilePhoto: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { name: true } }),
+    ]);
+    const incoming = {
+      event: 'call:incoming',
+      callId: call.id,
+      callerId: userId,
+      callerName: profile?.fullName || caller?.name || 'Unknown',
+      callerAvatar: profile?.profilePhoto || null,
+      requestId: data.requestId,
+      ...usage,
+    };
+    const delivered = sendGlobalToUser(data.targetId, incoming);
+    ws.send(JSON.stringify({
+      event: 'call:initiated',
+      callId: call.id,
+      receiverId: data.targetId,
+      delivered,
+      ...usage,
+    }));
+
+    if (!delivered && targetUser.fcmToken) {
+      sendPushNotification(
+        targetUser.fcmToken,
+        'Incoming call',
+        `${incoming.callerName} is calling you`,
+        {
+          event: 'call:incoming',
+          callId: String(call.id),
+          callerId: String(userId),
+          callerName: incoming.callerName,
+          callerAvatar: incoming.callerAvatar ?? '',
+          requestId: data.requestId ?? '',
+        },
+      ).catch((error) => logger.error(`Incoming call push failed: ${error}`));
+    }
+
+    const ringTimeout = setTimeout(async () => {
+      const result = await prisma.call.updateMany({
+        where: { id: call.id, status: CallStatus.RINGING },
+        data: { status: CallStatus.MISSED, endedAt: new Date(), endReason: 'no_answer' },
+      });
+      if (result.count) {
+        activeCallsByUser.delete(userId);
+        activeCallsByUser.delete(data.targetId);
+        sendGlobalToUser(userId, { event: 'call:end', callId: call.id, reason: 'no_answer' });
+        sendGlobalToUser(data.targetId, { event: 'call:end', callId: call.id, reason: 'no_answer' });
+      }
+    }, 30_000);
+    ringTimeout.unref();
+    return;
+  }
+
+  const call = await prisma.call.findUnique({ where: { id: data.callId } });
+  if (!call || (call.callerId !== userId && call.receiverId !== userId)) {
+    ws.send(JSON.stringify({ event: 'call:end', callId: data.callId, reason: 'stale_call' }));
+    return;
+  }
+  const peerId = call.callerId === userId ? call.receiverId : call.callerId;
+  if (peerId !== data.targetId) {
+    ws.send(JSON.stringify({ event: 'call:end', callId: data.callId, reason: 'invalid_target' }));
+    return;
+  }
+
+  if (data.type === 'call:accept') {
+    if (userId !== call.receiverId) return;
+    const accepted = await prisma.call.updateMany({
+      where: { id: call.id, status: CallStatus.RINGING },
+      data: { status: CallStatus.ONGOING, startedAt: new Date() },
+    });
+    if (!accepted.count) {
+      ws.send(JSON.stringify({ event: 'call:end', callId: call.id, reason: 'stale_call' }));
+      return;
+    }
+    const usage = await CallService.getDailyPairUsage(userId, peerId);
+    sendGlobalToUser(peerId, { event: 'call:accept', callId: call.id, fromUserId: userId, ...usage });
+    ws.send(JSON.stringify({ event: 'call:accepted', callId: call.id, ...usage }));
+    return;
+  }
+
+  if (data.type === 'webrtc:offer' || data.type === 'webrtc:answer' || data.type === 'webrtc:ice-candidate') {
+    if (call.status !== CallStatus.ONGOING) return;
+    const mediaPayload = data.type === 'webrtc:ice-candidate'
+      ? { candidate: data.candidate }
+      : { description: data.description };
+    sendGlobalToUser(peerId, {
+      event: data.type,
+      callId: call.id,
+      fromUserId: userId,
+      ...mediaPayload,
+    });
+    return;
+  }
+
+  const status = data.type === 'call:reject'
+    ? CallStatus.REJECTED
+    : data.type === 'call:busy'
+      ? CallStatus.BUSY
+      : call.status === CallStatus.RINGING
+        ? CallStatus.CANCELLED
+        : CallStatus.COMPLETED;
+  const now = new Date();
+  const duration = call.startedAt
+    ? Math.max(0, Math.floor((now.getTime() - call.startedAt.getTime()) / 1000))
+    : 0;
+  const ended = await prisma.call.updateMany({
+    where: { id: call.id, status: { in: [CallStatus.RINGING, CallStatus.ONGOING] } },
+    data: { status, endedAt: now, duration, endReason: 'reason' in data ? data.reason : undefined },
+  });
+  if (!ended.count) return;
+  activeCallsByUser.delete(call.callerId);
+  activeCallsByUser.delete(call.receiverId);
+  sendGlobalToUser(peerId, {
+    event: data.type,
+    callId: call.id,
+    fromUserId: userId,
+    reason: 'reason' in data ? data.reason : undefined,
+  });
 }
 
 async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any): Promise<void> {

@@ -6,7 +6,10 @@ import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
 import { randomInt } from 'crypto';
 import { otpProximityForRequest } from '../utils/otp-proximity';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
-import { deleteExpiredMessages, messageRetentionCutoff } from './message-retention.service';
+import { deleteExpiredMessages } from './message-retention.service';
+import { RealtimeMessageService } from './realtime-message.service';
+import { scheduleReadyNowExpiration } from './request-expiration.service';
+import { restoreReadyNow, suspendReadyNow } from './ready-now.service';
 
 export type CreateRequestInput = {
   receiverId: number;
@@ -30,6 +33,8 @@ export type CreateRequestInput = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges?: boolean;
   readyToPayTip?: boolean;
+  needsMateVehicle?: boolean;
+  offersRequesterVehicle?: boolean;
 };
 
 export type FrontendRequestStatus =
@@ -65,6 +70,8 @@ export type MappedRequest = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges: boolean;
   readyToPayTip: boolean;
+  needsMateVehicle: boolean;
+  offersRequesterVehicle: boolean;
   requestHourlyRate: number | null;
   mateGender?: string | null;
   mateDob?: string | null;
@@ -102,6 +109,19 @@ export type MappedRequest = {
   sessionStatus?: string | null;
   sessionEndedAt?: string | null;
   sessionElapsedSec?: number | null;
+  postMeet?: {
+    rating: number | null;
+    review: string | null;
+    ratedAt: string | null;
+    paymentCompleted: boolean;
+    paymentUpiId: string | null;
+    paymentMode: string | null;
+    paidAt: string | null;
+    amountPaid: number;
+    amountReceived: number;
+    reportAvailableUntil: string | null;
+    reportSubmitted: boolean;
+  };
   otp?: string | null;
   otpProximityReady?: boolean;
   otpDistanceMeters?: number | null;
@@ -128,7 +148,66 @@ const ACTIVE_DUPLICATE_REQUEST_STATUSES = [
   RequestStatus.CONFIRMED,
 ] as RequestStatus[];
 const DAY_KEYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
-const INSTANT_RESPONSE_WINDOWS_MINUTES = [10, 20, 30] as const;
+const INSTANT_RESPONSE_WINDOWS_MINUTES = [5, 8, 10, 12, 15, 20] as const;
+
+function localDayBounds(date: Date, timezoneOffsetMinutes = 0): { start: Date; end: Date } {
+  const offsetMs = timezoneOffsetMinutes * 60 * 1000;
+  const local = new Date(date.getTime() + offsetMs);
+  const start = new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offsetMs,
+  );
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+}
+
+function isToday(date: Date, timezoneOffsetMinutes = 0): boolean {
+  const target = localDayBounds(date, timezoneOffsetMinutes);
+  const now = localDayBounds(new Date(), timezoneOffsetMinutes);
+  return target.start.getTime() === now.start.getTime();
+}
+
+const activeSessionFilter = {
+  OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
+};
+
+async function scheduledRequestsForUserOnDate(
+  userId: number,
+  date: Date,
+  timezoneOffsetMinutes = 0,
+  excludeRequestId?: number,
+) {
+  const { start, end } = localDayBounds(date, timezoneOffsetMinutes);
+  return (
+    (await prisma.request.findMany({
+      where: {
+        ...(excludeRequestId == null ? {} : { id: { not: excludeRequestId } }),
+        instantBooking: false,
+        status: RequestStatus.CONFIRMED,
+        fromDateTime: {
+          gte: new Date(start.getTime() - 48 * 60 * 60 * 1000),
+          lt: new Date(end.getTime() + 48 * 60 * 60 * 1000),
+        },
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { id: true, fromDateTime: true, toDateTime: true, receiverId: true },
+      orderBy: { fromDateTime: 'asc' },
+    })) ?? []
+  );
+}
+
+function hasMeetOnDate(
+  meets: Array<{ fromDateTime: Date; toDateTime: Date | null }>,
+  date: Date,
+  timezoneOffsetMinutes = 0,
+): boolean {
+  const { start, end } = localDayBounds(date, timezoneOffsetMinutes);
+  const now = new Date();
+  return meets.some(
+    (meet) =>
+      meet.fromDateTime >= start &&
+      meet.fromDateTime < end &&
+      (meet.toDateTime == null || meet.toDateTime > now),
+  );
+}
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
   switch (status) {
@@ -183,8 +262,7 @@ const shouldExpireRequest = (request: {
   const isInstantBooking = Boolean(request.instantBooking);
   const startsAt = request.fromDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
   const responseTimedOut = Boolean(
-    (request.status === RequestStatus.PENDING ||
-      request.status === RequestStatus.ACCEPTED_BY_RECEIVER) &&
+    request.status === RequestStatus.PENDING &&
     request.responseDeadlineAt &&
     request.responseDeadlineAt.getTime() <= Date.now(),
   );
@@ -221,6 +299,7 @@ const effectiveRequestStatus = (request: {
 
 const requestHistoryFields = (
   request: {
+    id: number;
     status: RequestStatus;
     createdAt: Date;
     updatedAt: Date;
@@ -230,9 +309,26 @@ const requestHistoryFields = (
     cancelledAt?: Date | null;
     cancelledById?: number | null;
     cancellationFeeReason?: string | null;
-    session?: { status: SessionStatus; endedAt?: Date | null } | null;
+    senderId: number;
+    quotedHourlyRate?: number | null;
+    session?: {
+      status: SessionStatus;
+      endedAt?: Date | null;
+      senderRating?: number | null;
+      senderReview?: string | null;
+      senderRatedAt?: Date | null;
+      receiverRating?: number | null;
+      receiverReview?: string | null;
+      receiverRatedAt?: Date | null;
+      paymentCompletedAt?: Date | null;
+      paymentCompletedBy?: number | null;
+      totalElapsedSeconds?: number | null;
+      paymentUpiId?: string | null;
+      paymentMode?: string | null;
+    } | null;
   },
   viewerId: number,
+  reportedRequestIds: ReadonlySet<number> = new Set(),
 ) => {
   const status = effectiveRequestStatus(request);
   let eventAt = request.createdAt;
@@ -263,6 +359,52 @@ const requestHistoryFields = (
           ? ('you' as const)
           : ('mate' as const),
     historyReason: request.cancellationFeeReason ?? null,
+    postMeet: request.session
+      ? {
+          rating:
+            request.senderId === viewerId
+              ? (request.session.senderRating ?? null)
+              : (request.session.receiverRating ?? null),
+          review:
+            request.senderId === viewerId
+              ? (request.session.senderReview ?? null)
+              : (request.session.receiverReview ?? null),
+          ratedAt:
+            (request.senderId === viewerId
+              ? request.session.senderRatedAt
+              : request.session.receiverRatedAt
+            )?.toISOString() ?? null,
+          paymentCompleted: request.session.paymentCompletedAt != null,
+          paymentUpiId: request.session.paymentUpiId ?? null,
+          paymentMode: request.session.paymentMode ?? null,
+          paidAt: request.session.paymentCompletedAt?.toISOString() ?? null,
+          amountPaid:
+            request.session.paymentCompletedAt != null &&
+            request.session.paymentCompletedBy === viewerId
+              ? Number(
+                  (
+                    ((request.session.totalElapsedSeconds ?? 0) / 3600) *
+                    (request.quotedHourlyRate ?? 0)
+                  ).toFixed(2),
+                )
+              : 0,
+          amountReceived:
+            request.session.paymentCompletedAt != null &&
+            request.session.paymentCompletedBy != null &&
+            request.session.paymentCompletedBy !== viewerId
+              ? Number(
+                  (
+                    ((request.session.totalElapsedSeconds ?? 0) / 3600) *
+                    (request.quotedHourlyRate ?? 0)
+                  ).toFixed(2),
+                )
+              : 0,
+          reportAvailableUntil: request.session.endedAt
+            ? new Date(request.session.endedAt.getTime() + 2 * 60 * 60 * 1000).toISOString()
+            : null,
+          reportSubmitted: reportedRequestIds.has(request.id),
+        }
+      : undefined,
   };
 };
 
@@ -288,10 +430,7 @@ const getProfileAvatar = (
   profile?: { profilePhoto?: string | null; gallery?: string[] | null } | null,
 ): string => {
   const profilePhoto = profile?.profilePhoto?.trim();
-  if (profilePhoto) {
-    return profilePhoto;
-  }
-  return profile?.gallery?.find((uri) => uri.trim()) ?? '';
+  return profilePhoto ?? '';
 };
 
 const categoryRatesRecord = (value?: Profile['categoryRates'] | null): Record<string, number> => {
@@ -360,6 +499,7 @@ const profileFields = (user: {
 }) => {
   const profile = user.profile;
   const gallery = profile?.gallery ?? [];
+  const publicGallery = gallery.filter((uri) => !uri.toLowerCase().includes('live-photo'));
   return {
     mateGender: profile?.gender ?? null,
     mateDob: profile?.dob?.toISOString() ?? null,
@@ -384,7 +524,7 @@ const profileFields = (user: {
     mateLivePhotoAdded:
       Boolean(profile?.livePhotoUrl?.trim()) ||
       gallery.some((uri) => uri.toLowerCase().includes('live-photo')),
-    mateGalleryPhotos: gallery,
+    mateGalleryPhotos: publicGallery,
     mateLatitude: profile?.latitude ?? null,
     mateLongitude: profile?.longitude ?? null,
     mateInstagram: profile?.instagram ?? null,
@@ -610,7 +750,7 @@ export class RequestService {
         status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
         OR: [
           {
-            status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+            status: RequestStatus.PENDING,
             responseDeadlineAt: { lte: now },
           },
           {
@@ -681,8 +821,22 @@ export class RequestService {
       where: {
         senderId,
         receiverId: data.receiverId,
-        status: { in: ACTIVE_DUPLICATE_REQUEST_STATUSES },
-        OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
+        AND: [
+          activeSessionFilter,
+          {
+            OR: [
+              {
+                status: {
+                  in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER],
+                },
+              },
+              {
+                status: RequestStatus.CONFIRMED,
+                OR: [{ toDateTime: null }, { toDateTime: { gt: new Date() } }],
+              },
+            ],
+          },
+        ],
       },
       select: { id: true },
     });
@@ -693,11 +847,45 @@ export class RequestService {
 
     const instantBooking = Boolean(data.instantBooking);
 
+    const timezoneOffsetMinutes = data.timezoneOffsetMinutes ?? 0;
+    const [senderMeetings, receiverMeetings] = await Promise.all([
+      scheduledRequestsForUserOnDate(senderId, data.fromDateTime, timezoneOffsetMinutes),
+      scheduledRequestsForUserOnDate(data.receiverId, data.fromDateTime, timezoneOffsetMinutes),
+    ]);
+
+    if (!instantBooking) {
+      if (
+        hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes) ||
+        hasMeetOnDate(receiverMeetings, data.fromDateTime, timezoneOffsetMinutes)
+      ) {
+        throw new AppError('This date is fully booked by a confirmed scheduled meet', 409);
+      }
+    } else if (
+      hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes) ||
+      hasMeetOnDate(receiverMeetings, data.fromDateTime, timezoneOffsetMinutes)
+    ) {
+      throw new AppError('Ready Now is unavailable on a date with a scheduled meet', 409);
+    }
+
+    if (!instantBooking && isToday(data.fromDateTime, timezoneOffsetMinutes)) {
+      const senderProfile = await prisma.profile.findUnique({ where: { userId: senderId } });
+      if (senderProfile?.readyNowEnabled) {
+        throw new AppError('Turn off Ready Now before creating a scheduled request for today', 409);
+      }
+      if (receiver.profile?.readyNowEnabled) {
+        throw new AppError(
+          'This user is Ready Now and cannot receive a scheduled request today',
+          409,
+        );
+      }
+    }
+
     if (!instantBooking && data.fromDateTime < minimumScheduledStart()) {
       throw new AppError('Scheduled requests must start at least 15 minutes from now', 400);
     }
 
     if (
+      !instantBooking &&
       !requestFitsAvailability(
         receiver.profile,
         data.fromDateTime,
@@ -708,6 +896,13 @@ export class RequestService {
       throw new AppError('Please choose a meeting time within this companion availability', 400);
     }
 
+    if (instantBooking) {
+      const senderProfile = await prisma.profile.findUnique({ where: { userId: senderId } });
+      if (senderProfile?.readyNowEnabled) {
+        throw new AppError('Turn off Ready Now before sending a Ready Now request', 409);
+      }
+    }
+
     if (instantBooking && !receiver.profile?.instantAvailable) {
       throw new AppError('This companion is not ready now', 400);
     }
@@ -716,10 +911,10 @@ export class RequestService {
     if (instantBooking) {
       const responseMinutes = data.responseTime;
       if (responseMinutes == null) {
-        throw new AppError('Response time must be 10, 20, or 30 minutes', 400);
+        throw new AppError('Response time must be 5, 8, 10, 12, 15, or 20 minutes', 400);
       }
       if (!INSTANT_RESPONSE_WINDOWS_MINUTES.some((minutes) => minutes === responseMinutes)) {
-        throw new AppError('Response time must be 10, 20, or 30 minutes', 400);
+        throw new AppError('Response time must be 5, 8, 10, 12, 15, or 20 minutes', 400);
       }
       responseDeadlineAt = new Date(Date.now() + responseMinutes * 60 * 1000);
     }
@@ -752,6 +947,7 @@ export class RequestService {
         meetLocationLongitude: data.meetLocationLongitude ?? null,
         fromDateTime: data.fromDateTime,
         toDateTime: data.toDateTime,
+        timezoneOffsetMinutes,
         instantBooking,
         responseDeadlineAt,
         message: data.message ?? '',
@@ -759,10 +955,15 @@ export class RequestService {
         ...beneficiaryData,
         readyToPayTravelCharges: data.readyToPayTravelCharges ?? false,
         readyToPayTip: data.readyToPayTip ?? false,
+        needsMateVehicle: data.needsMateVehicle ?? false,
+        offersRequesterVehicle: data.offersRequesterVehicle ?? false,
         quotedHourlyRate: fixedHourlyRate,
         status: RequestStatus.PENDING,
       },
     });
+    if (newRequest.instantBooking && newRequest.responseDeadlineAt) {
+      scheduleReadyNowExpiration(newRequest.responseDeadlineAt);
+    }
 
     const result = {
       id: newRequest.id,
@@ -783,6 +984,8 @@ export class RequestService {
       ...beneficiaryFields(newRequest),
       readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
       readyToPayTip: newRequest.readyToPayTip,
+      needsMateVehicle: newRequest.needsMateVehicle,
+      offersRequesterVehicle: newRequest.offersRequesterVehicle,
       requestHourlyRate: newRequest.quotedHourlyRate,
       ...profileFields(receiver),
       status: 'pending' as const,
@@ -847,6 +1050,20 @@ export class RequestService {
       }),
     ]);
 
+    const completedRequestIds = [...sentRequests, ...receivedRequests]
+      .filter((request) => request.session?.endedAt != null)
+      .map((request) => request.id);
+    const submittedReports =
+      completedRequestIds.length === 0
+        ? []
+        : await prisma.report.findMany({
+            where: { reporterId: userId, requestId: { in: completedRequestIds } },
+            select: { requestId: true },
+          });
+    const reportedRequestIds = new Set(
+      submittedReports.flatMap((report) => (report.requestId == null ? [] : [report.requestId])),
+    );
+
     await RequestService.persistExpiredRequests([...sentRequests, ...receivedRequests]);
 
     const sent = sentRequests.map(
@@ -869,11 +1086,13 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        needsMateVehicle: req.needsMateVehicle,
+        offersRequesterVehicle: req.offersRequesterVehicle,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
-        ...requestHistoryFields(req, userId),
+        ...requestHistoryFields(req, userId, reportedRequestIds),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
@@ -904,11 +1123,13 @@ export class RequestService {
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        needsMateVehicle: req.needsMateVehicle,
+        offersRequesterVehicle: req.offersRequesterVehicle,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
         sentAt: formatSentAt(req.createdAt),
-        ...requestHistoryFields(req, userId),
+        ...requestHistoryFields(req, userId, reportedRequestIds),
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
@@ -949,11 +1170,14 @@ export class RequestService {
           otp: null,
         },
       });
+      if (request.status === RequestStatus.CONFIRMED) {
+        await restoreReadyNow([request.senderId, request.receiverId]);
+      }
       throw new AppError('This request has expired', 400);
     }
 
     if (status === 'cancelled') {
-      if (request.senderId !== userId) {
+      if (request.senderId !== userId && request.receiverId !== userId) {
         throw new AppError('You are not authorized to cancel this request', 403);
       }
       if (
@@ -965,6 +1189,9 @@ export class RequestService {
       }
       if (request.session) {
         throw new AppError('This meet has already started. End the session instead.', 400);
+      }
+      if (request.status === RequestStatus.CONFIRMED && !cancellationReason?.trim()) {
+        throw new AppError('A cancellation reason is required for a confirmed meet', 400);
       }
     } else {
       if (status === 'declined') {
@@ -979,6 +1206,29 @@ export class RequestService {
         if (request.status === RequestStatus.PENDING) {
           if (request.receiverId !== userId) {
             throw new AppError('You are not authorized to accept this request', 403);
+          }
+          if (!request.instantBooking) {
+            const timezoneOffsetMinutes = request.timezoneOffsetMinutes ?? 0;
+            const [senderMeetings, receiverMeetings] = await Promise.all([
+              scheduledRequestsForUserOnDate(
+                request.senderId,
+                request.fromDateTime,
+                timezoneOffsetMinutes,
+                request.id,
+              ),
+              scheduledRequestsForUserOnDate(
+                request.receiverId,
+                request.fromDateTime,
+                timezoneOffsetMinutes,
+                request.id,
+              ),
+            ]);
+            if (
+              hasMeetOnDate(senderMeetings, request.fromDateTime, timezoneOffsetMinutes) ||
+              hasMeetOnDate(receiverMeetings, request.fromDateTime, timezoneOffsetMinutes)
+            ) {
+              throw new AppError('This date is fully booked by a confirmed scheduled meet', 409);
+            }
           }
           if (
             request.quotedHourlyRate == null &&
@@ -1003,13 +1253,10 @@ export class RequestService {
       status === 'confirmed' &&
       request.status === RequestStatus.ACCEPTED_BY_RECEIVER &&
       request.senderId === userId;
-    const receiverAcceptingFixedRate =
-      status === 'confirmed' &&
-      request.status === RequestStatus.PENDING &&
-      request.receiverId === userId &&
-      request.quotedHourlyRate != null &&
-      request.quotedHourlyRate > 0;
-    const finalConfirmation = senderConfirmingQuote || receiverAcceptingFixedRate;
+    // Receiver acceptance is always the first confirmation, including when
+    // the support rate was already known. Only the original requester can
+    // move an accepted request to the final CONFIRMED state.
+    const finalConfirmation = senderConfirmingQuote;
     const otpProximity = finalConfirmation ? otpProximityForRequest(request) : null;
     const otpVal =
       finalConfirmation && otpProximity?.ready ? String(randomInt(1000, 10_000)) : null;
@@ -1023,30 +1270,144 @@ export class RequestService {
     const now = new Date();
     const normalizedCancellationReason = cancellationReason?.trim() || null;
 
-    const updatedRequest = await prisma.request.update({
-      where: { id: requestId },
-      data: {
-        status: nextStatus,
-        otp: otpVal,
-        ...(status === 'confirmed' &&
-        request.status === RequestStatus.PENDING &&
-        request.quotedHourlyRate == null
-          ? { quotedHourlyRate: hourlyRate }
-          : {}),
-        ...(status === 'cancelled' || status === 'declined'
-          ? {
-              cancelledAt: now,
-              cancelledById: userId,
-              cancellationFee: 0,
-              cancellationFeeReason: normalizedCancellationReason,
+    const updateData = {
+      status: nextStatus,
+      otp: otpVal,
+      ...(status === 'confirmed' &&
+      request.status === RequestStatus.PENDING &&
+      request.quotedHourlyRate == null
+        ? { quotedHourlyRate: hourlyRate }
+        : {}),
+      ...(status === 'cancelled' || status === 'declined'
+        ? {
+            cancelledAt: now,
+            cancelledById: userId,
+            cancellationFee: 0,
+            cancellationFeeReason: normalizedCancellationReason,
+          }
+        : {}),
+    };
+    const updateInclude = {
+      sender: { include: { profile: true } },
+      receiver: { include: { profile: true } },
+    } as const;
+
+    const updatedRequest = finalConfirmation
+      ? await prisma.$transaction(
+          async (tx) => {
+            for (const participantId of [request.senderId, request.receiverId].sort(
+              (left, right) => left - right,
+            )) {
+              await tx.$queryRaw(
+                Prisma.sql`SELECT pg_advisory_xact_lock(${participantId})::text AS lock_result`,
+              );
             }
-          : {}),
-      },
-      include: {
-        sender: { include: { profile: true } },
-        receiver: { include: { profile: true } },
-      },
-    });
+
+            const current = await tx.request.findUnique({
+              where: { id: requestId },
+              select: { status: true },
+            });
+            if (current?.status !== RequestStatus.ACCEPTED_BY_RECEIVER) {
+              throw new AppError('Another request was confirmed first', 409);
+            }
+
+            const timezoneOffsetMinutes = request.timezoneOffsetMinutes ?? 0;
+            const { start, end } = localDayBounds(request.fromDateTime, timezoneOffsetMinutes);
+            const conflictingMeeting = await tx.request.findFirst({
+              where: {
+                id: { not: requestId },
+                status: RequestStatus.CONFIRMED,
+                fromDateTime: { gte: start, lt: end },
+                OR: [
+                  { senderId: { in: [request.senderId, request.receiverId] } },
+                  { receiverId: { in: [request.senderId, request.receiverId] } },
+                ],
+                AND: [
+                  activeSessionFilter,
+                  {
+                    OR: [{ toDateTime: null }, { toDateTime: { gt: now } }],
+                  },
+                ],
+              },
+              select: { id: true },
+            });
+            if (conflictingMeeting) {
+              throw new AppError('Another request was confirmed first', 409);
+            }
+
+            const winner = await tx.request.update({
+              where: { id: requestId },
+              data: updateData,
+              include: updateInclude,
+            });
+            const sameDateAlternatives = {
+              id: { not: requestId },
+              fromDateTime: { gte: start, lt: end },
+              session: null,
+            } as const;
+
+            await tx.request.updateMany({
+              where: {
+                ...sameDateAlternatives,
+                OR: [
+                  { senderId: request.senderId },
+                  {
+                    senderId: request.receiverId,
+                    receiverId: request.senderId,
+                  },
+                ],
+                status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+              },
+              data: {
+                status: RequestStatus.CANCELLED,
+                otp: null,
+                cancelledAt: now,
+                cancellationFeeReason: 'Auto Cancelled',
+              },
+            });
+            await tx.request.updateMany({
+              where: {
+                ...sameDateAlternatives,
+                receiverId: request.receiverId,
+                senderId: { not: request.senderId },
+                status: RequestStatus.ACCEPTED_BY_RECEIVER,
+              },
+              data: {
+                status: RequestStatus.CANCELLED,
+                otp: null,
+                cancelledAt: now,
+                cancellationFeeReason: 'Late Response',
+              },
+            });
+            await tx.request.updateMany({
+              where: {
+                ...sameDateAlternatives,
+                receiverId: request.receiverId,
+                senderId: { not: request.senderId },
+                status: RequestStatus.PENDING,
+              },
+              data: {
+                status: RequestStatus.CANCELLED,
+                otp: null,
+                cancelledAt: now,
+                cancellationFeeReason: 'Auto Cancelled',
+              },
+            });
+            return winner;
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        )
+      : await prisma.request.update({
+          where: { id: requestId },
+          data: updateData,
+          include: updateInclude,
+        });
+
+    if (finalConfirmation && updatedRequest.instantBooking) {
+      await suspendReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
+    } else if (status === 'cancelled' && request.status === RequestStatus.CONFIRMED) {
+      await restoreReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
+    }
 
     const isSender = updatedRequest.senderId === userId;
     const partner = isSender ? updatedRequest.receiver : updatedRequest.sender;
@@ -1061,14 +1422,7 @@ export class RequestService {
       await NotificationService.createNotification(
         updatedRequest.senderId,
         'request_accepted',
-        `${receiverName} quoted Rs ${updatedRequest.quotedHourlyRate}/hr for ${updatedRequest.categoryLabel}. Please accept or reject the quote.`,
-        updatedRequest.receiverId,
-      );
-    } else if (status === 'confirmed' && receiverAcceptingFixedRate) {
-      await NotificationService.createNotification(
-        updatedRequest.senderId,
-        'request_accepted',
-        `${receiverName} accepted your ${updatedRequest.categoryLabel} request at Rs ${updatedRequest.quotedHourlyRate}/hr.`,
+        `${receiverName} accepted your ${updatedRequest.categoryLabel} request at Rs ${updatedRequest.quotedHourlyRate}/hr. Please confirm or reject it.`,
         updatedRequest.receiverId,
       );
     } else if (status === 'confirmed') {
@@ -1084,11 +1438,12 @@ export class RequestService {
       const reasonText = normalizedCancellationReason
         ? `. Reason: ${normalizedCancellationReason}`
         : '';
+      const cancelledBySender = userId === updatedRequest.senderId;
       await NotificationService.createNotification(
-        updatedRequest.receiverId,
+        cancelledBySender ? updatedRequest.receiverId : updatedRequest.senderId,
         'meet_canceled',
-        `${senderName} cancelled your meet${reasonText}`,
-        updatedRequest.senderId,
+        `${cancelledBySender ? senderName : receiverName} cancelled your meet${reasonText}`,
+        userId,
       );
     } else if (status === 'declined') {
       const senderRejectedQuote = userId === updatedRequest.senderId;
@@ -1121,6 +1476,8 @@ export class RequestService {
       ...beneficiaryFields(updatedRequest),
       readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,
       readyToPayTip: updatedRequest.readyToPayTip,
+      needsMateVehicle: updatedRequest.needsMateVehicle,
+      offersRequesterVehicle: updatedRequest.offersRequesterVehicle,
       requestHourlyRate: updatedRequest.quotedHourlyRate,
       ...profileFields(partner),
       status: mapStatusToFrontend(updatedRequest.status),
@@ -1187,7 +1544,11 @@ export class RequestService {
     return result;
   }
 
-  public static async getRequestMessages(userId: number, requestId: number) {
+  public static async getRequestMessages(
+    userId: number,
+    requestId: number,
+    pagination: { limit?: number; before?: string } = {},
+  ) {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
     });
@@ -1200,29 +1561,47 @@ export class RequestService {
       throw new AppError('You are not authorized to view messages for this request', 403);
     }
 
-    const cutoff = messageRetentionCutoff();
+    if (request.status !== RequestStatus.CONFIRMED) {
+      throw new AppError('Chat is available after both users confirm the request', 403);
+    }
+
     await deleteExpiredMessages();
+    const limit = Math.min(Math.max(pagination.limit ?? 30, 1), 100);
+    const before = pagination.before ? new Date(pagination.before) : null;
+    if (before && Number.isNaN(before.getTime())) {
+      throw new AppError('Invalid message pagination cursor', 400);
+    }
     const messages = await prisma.message.findMany({
-      where: { requestId, createdAt: { gte: cutoff } },
-      orderBy: { createdAt: 'asc' },
+      where: {
+        requestId,
+        expiresAt: { gt: new Date() },
+        ...(before ? { createdAt: { lt: before } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
     });
 
-    return messages.map((msg) => ({
-      id: msg.id,
+    return messages.reverse().map((msg) => ({
+      id: msg.clientMessageId,
       sender: msg.senderId === userId ? 'me' : 'them',
       type: msg.type,
-      text: msg.type === 'text' ? msg.content : undefined,
+      text: msg.isDeleted
+        ? 'This message was deleted'
+        : msg.type === 'text'
+          ? msg.content
+          : undefined,
       imageUri: msg.type === 'image' ? (msg.mediaUrl ?? msg.content) : undefined,
       voiceUri: msg.type === 'voice' ? (msg.mediaUrl ?? msg.content) : undefined,
       voiceDurationSec: msg.voiceDuration ?? undefined,
       createdAt: msg.createdAt.getTime(),
+      isDeleted: msg.isDeleted,
     }));
   }
 
   public static async deleteRequestMessage(
     userId: number,
     requestId: number,
-    messageId: number,
+    messageId: string,
   ): Promise<void> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
@@ -1236,27 +1615,10 @@ export class RequestService {
       throw new AppError('You are not authorized to delete messages for this request', 403);
     }
 
-    const message = await prisma.message.findUnique({
-      where: { id: messageId },
-    });
-
-    if (!message || message.requestId !== requestId) {
-      throw new AppError('Message not found', 404);
-    }
-
-    if (message.senderId !== userId) {
-      throw new AppError('You can only delete your own messages', 403);
-    }
-
-    await prisma.message.delete({
-      where: { id: messageId },
-    });
-
-    const receiverId = request.senderId === userId ? request.receiverId : request.senderId;
-    sendToUserForRequest(receiverId, requestId, {
-      event: 'message_deleted',
-      requestId,
+    await RealtimeMessageService.handleDeleteForEveryone(userId, {
+      event: 'delete_for_everyone',
       messageId,
+      chatRoomId: String(requestId),
     });
   }
 }

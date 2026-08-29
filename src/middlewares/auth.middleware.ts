@@ -10,6 +10,8 @@ interface DecodedToken {
   email?: string | null;
   role: Role;
   authVersion: number;
+  sid: string;
+  did: string;
   iat: number;
   exp?: number;
 }
@@ -32,6 +34,11 @@ export const protect = async (
 
     // Verify token
     const decoded = jwt.verify(token, env.JWT_SECRET) as DecodedToken;
+
+    const requestDeviceId = req.header('x-device-id');
+    if (!decoded.sid || !decoded.did || !requestDeviceId || requestDeviceId !== decoded.did) {
+      return next(new AppError('This session is not valid for this device.', 401));
+    }
 
     // Check if user still exists in database
     const user = await prisma.user.findUnique({
@@ -58,8 +65,21 @@ export const protect = async (
       return next(new AppError('This account was logged in on another device. Please log in again.', 401));
     }
 
+    const session = await prisma.authSession.findUnique({ where: { id: decoded.sid } });
+    if (
+      !session ||
+      session.userId !== user.id ||
+      session.deviceId !== decoded.did ||
+      session.revokedAt ||
+      session.expiresAt <= new Date()
+    ) {
+      return next(new AppError('Your session has expired. Please log in again.', 401));
+    }
+
     // Grant access to protected route by attaching user to request
     req.user = user;
+    req.authSessionId = session.id;
+    req.authDeviceId = session.deviceId;
     next();
   } catch (error) {
     if (error instanceof jwt.JsonWebTokenError) {

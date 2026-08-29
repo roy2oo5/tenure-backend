@@ -19,6 +19,11 @@ export const seedCategories = async () => {
         'Accompanying someone while shopping, helping them select items, carry bags, or providing company.',
     },
     {
+      name: 'Tech & Education Support',
+      description:
+        'Helping someone with technology, learning, or educational needs, such as understanding software, setting up devices, learning new skills, completing assignments, or getting guidance with studies and projects.',
+    },
+    {
       name: 'Gym, Yoga & Jogging Support',
       description:
         'Joining someone for workouts, yoga, or jogging and providing motivation or exercise assistance.',
@@ -83,5 +88,31 @@ export const seedCategories = async () => {
     logger.info('🌱 Categories seeded successfully');
   } catch (error: any) {
     logger.error(`❌ Categories seeding failed: ${error.message}`);
+  }
+  const languagesToSeed = [
+    'English',
+    'Hindi',
+    'Kannada',
+    'Tamil',
+    'Telugu',
+    'Malayalam',
+    'Marathi',
+    'Bengali',
+    'Gujarati',
+    'Punjabi',
+    'Urdu',
+  ];
+
+  try {
+    for (const name of languagesToSeed) {
+      await prisma.language.upsert({
+        where: { name },
+        update: {},
+        create: { name },
+      });
+    }
+    logger.info('Profile languages seeded successfully');
+  } catch (error: any) {
+    logger.error(`Profile languages seeding failed: ${error.message}`);
   }
 };

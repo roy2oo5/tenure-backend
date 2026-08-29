@@ -44,7 +44,7 @@ export const createRequestSchema = z.object({
         .optional()
         .default(0),
       instantBooking: z.boolean().optional().default(false),
-      responseTime: z.number().int('Response time must be 10, 20, or 30 minutes').optional(),
+      responseTime: z.number().int('Invalid response time').optional(),
       responseDeadlineAt: z.preprocess(
         (arg) => (typeof arg === 'string' ? (arg.trim() ? new Date(arg) : null) : arg),
         z
@@ -67,6 +67,8 @@ export const createRequestSchema = z.object({
         .nullable(),
       readyToPayTravelCharges: z.boolean().optional().default(false),
       readyToPayTip: z.boolean().optional().default(false),
+      needsMateVehicle: z.boolean().optional().default(false),
+      offersRequesterVehicle: z.boolean().optional().default(false),
     })
     .superRefine((body, ctx) => {
       if (body.toDateTime && body.toDateTime <= body.fromDateTime) {
@@ -83,24 +85,28 @@ export const createRequestSchema = z.object({
           message: 'Support duration is required',
         });
       } else {
-        const durationMinutes =
-          (body.toDateTime.getTime() - body.fromDateTime.getTime()) / 60000;
-        if (![30, 45, 60, 75, 90, 105, 120].includes(durationMinutes)) {
+        const durationMinutes = (body.toDateTime.getTime() - body.fromDateTime.getTime()) / 60000;
+        const isValidDuration = body.instantBooking
+          ? durationMinutes >= 30 && durationMinutes <= 12 * 60 && durationMinutes % 30 === 0
+          : [30, 45, 60, 75, 90, 105, 120].includes(durationMinutes);
+        if (!isValidDuration) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['toDateTime'],
-            message: 'Support duration must be between 30 minutes and 2 hours',
+            message: body.instantBooking
+              ? 'Ready Now support duration must be in 30-minute intervals from 30 minutes to 12 hours'
+              : 'Support duration must be between 30 minutes and 2 hours',
           });
         }
       }
       if (
         body.instantBooking &&
-        (body.responseTime === undefined || ![10, 20, 30].includes(body.responseTime))
+        (body.responseTime === undefined || ![5, 8, 10, 12, 15, 20].includes(body.responseTime))
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['responseTime'],
-          message: 'Response time must be 10, 20, or 30 minutes',
+          message: 'Response time must be 5, 8, 10, 12, 15, or 20 minutes',
         });
       }
       if (body.bookingFor !== 'someone_else') {

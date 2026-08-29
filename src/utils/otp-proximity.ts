@@ -1,6 +1,10 @@
 export const OTP_PROXIMITY_METERS = 20;
 export const OTP_LOCATION_FRESHNESS_MS = 60_000;
 
+// TEMP(testing): Keep the 20 m OTP validation disabled until the Play Store release.
+// Set this back to true before releasing the production build.
+export const OTP_PROXIMITY_VALIDATION_ENABLED = false;
+
 type RequestLocations = {
   senderCurrentLatitude: number | null;
   senderCurrentLongitude: number | null;
@@ -49,6 +53,14 @@ export function otpProximityForRequest(
   request: RequestLocations,
   now = new Date(),
 ): OtpProximity {
+  if (!OTP_PROXIMITY_VALIDATION_ENABLED) {
+    return {
+      ready: true,
+      distanceMeters: null,
+      message: 'OTP proximity validation is temporarily disabled for testing.',
+    };
+  }
+
   const senderFresh =
     request.senderLocationUpdatedAt != null &&
     now.getTime() - request.senderLocationUpdatedAt.getTime() <= OTP_LOCATION_FRESHNESS_MS;

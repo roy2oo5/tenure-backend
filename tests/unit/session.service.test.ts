@@ -9,7 +9,9 @@ vi.mock('@/config/database', () => ({
       create: vi.fn(),
       findUnique: vi.fn(),
       findFirst: vi.fn(),
+      findMany: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     request: {
       findUnique: vi.fn(),
@@ -20,6 +22,7 @@ vi.mock('@/config/database', () => ({
     },
     profile: {
       findFirst: vi.fn(),
+      updateMany: vi.fn(),
     },
     notification: {
       create: vi.fn(),
@@ -36,6 +39,10 @@ describe('SessionService', () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+  });
+
+  beforeEach(() => {
+    (prisma.profile.updateMany as any).mockResolvedValue({ count: 0 });
   });
 
   const mockRequest = {
@@ -79,9 +86,9 @@ describe('SessionService', () => {
     it('should throw an error if request does not exist', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        SessionService.startSession(1, 101, '1234')
-      ).rejects.toThrow('Meet request not found');
+      await expect(SessionService.startSession(1, 101, '1234')).rejects.toThrow(
+        'Meet request not found',
+      );
     });
 
     it('should throw an error if request is not confirmed', async () => {
@@ -90,26 +97,26 @@ describe('SessionService', () => {
         status: RequestStatus.PENDING,
       });
 
-      await expect(
-        SessionService.startSession(1, 101, '1234')
-      ).rejects.toThrow('Cannot start a session on an unconfirmed request');
+      await expect(SessionService.startSession(1, 101, '1234')).rejects.toThrow(
+        'Cannot start a session on an unconfirmed request',
+      );
     });
 
     it('should throw an error if user is not authorized', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(
-        SessionService.startSession(999, 101, '1234')
-      ).rejects.toThrow('You are not authorized to start a session for this request');
+      await expect(SessionService.startSession(999, 101, '1234')).rejects.toThrow(
+        'You are not authorized to start a session for this request',
+      );
     });
 
     it('should throw an error if OTP is invalid', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.session.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        SessionService.startSession(1, 101, 'invalid-otp')
-      ).rejects.toThrow('Invalid verification OTP code');
+      await expect(SessionService.startSession(1, 101, 'invalid-otp')).rejects.toThrow(
+        'Invalid verification OTP code',
+      );
     });
 
     it('should expire confirmed OTP requests 12 hours after meet time if no session started', async () => {
@@ -122,9 +129,9 @@ describe('SessionService', () => {
       });
       (prisma.session.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        SessionService.startSession(1, 101, '1234')
-      ).rejects.toThrow('This request has expired');
+      await expect(SessionService.startSession(1, 101, '1234')).rejects.toThrow(
+        'This request has expired',
+      );
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
@@ -185,6 +192,48 @@ describe('SessionService', () => {
     });
   });
 
+  describe('12-hour auto-pause', () => {
+    it('pauses an overdue session and notifies both participants', async () => {
+      const overdueSession = {
+        id: 201,
+        requestId: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: SessionStatus.RUNNING,
+        startedAt: new Date('2027-06-20T00:00:00.000Z'),
+        lastTimerStart: new Date('2027-06-20T00:00:00.000Z'),
+        totalElapsedSeconds: 0,
+        lastActionBy: null,
+      };
+      (prisma.session.findMany as any).mockResolvedValue([overdueSession]);
+      (prisma.session.updateMany as any).mockResolvedValue({ count: 1 });
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.user.findUnique as any).mockImplementation(({ where }: any) =>
+        Promise.resolve(where.id === 1 ? mockSenderUser : mockReceiverUser),
+      );
+      (prisma.notification.create as any).mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: data.userId + 1000, ...data }),
+      );
+
+      const count = await SessionService.autoPauseOverdueSessions(
+        new Date('2027-06-20T12:00:01.000Z'),
+      );
+
+      expect(count).toBe(1);
+      expect(prisma.session.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: SessionStatus.PAUSED,
+            totalElapsedSeconds: 43_200,
+            lastTimerStart: null,
+          }),
+        }),
+      );
+      expect(prisma.notification.create).toHaveBeenCalledTimes(2);
+      expect(sendToUser).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('pause transitions', () => {
     const startedAt = new Date(Date.now() - 5000);
     const lastTimerStart = new Date(Date.now() - 5000);
@@ -225,9 +274,9 @@ describe('SessionService', () => {
       };
       (prisma.session.findUnique as any).mockResolvedValue(pausedRequestedSession);
 
-      await expect(
-        SessionService.pauseConfirm(1, 101)
-      ).rejects.toThrow('You cannot confirm your own pause request');
+      await expect(SessionService.pauseConfirm(1, 101)).rejects.toThrow(
+        'You cannot confirm your own pause request',
+      );
     });
 
     it('pauseConfirm should succeed when confirmed by the partner, accumulating elapsed time', async () => {
@@ -293,9 +342,9 @@ describe('SessionService', () => {
       };
       (prisma.session.findUnique as any).mockResolvedValue(resumeRequestedSession);
 
-      await expect(
-        SessionService.resumeConfirm(1, 101)
-      ).rejects.toThrow('You cannot confirm your own resume request');
+      await expect(SessionService.resumeConfirm(1, 101)).rejects.toThrow(
+        'You cannot confirm your own resume request',
+      );
     });
 
     it('resumeConfirm should succeed when confirmed by partner', async () => {
@@ -356,7 +405,7 @@ describe('SessionService', () => {
       expect(result.status).toBe('ended');
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(3600);
-      expect(result.billingAmount).toBeCloseTo(50.00, 1);
+      expect(result.billingAmount).toBeCloseTo(50.0, 1);
     });
   });
 });

@@ -1,7 +1,8 @@
 import { prisma } from '../config/database';
-import { Prisma, Profile } from '@prisma/client';
+import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { generateUniqueTenureId } from '../utils/tenure-id';
 import { AppError } from '../utils/app-error';
+import { enforceAgeRestriction } from '../utils/age-restriction';
 import { sendGlobalToAll } from './websocket.service';
 import {
   processAadhaarSecureQR,
@@ -61,6 +62,8 @@ export type ProfileUpsertInput = {
   emergencyName?: string | null;
   emergencyPhone?: string | null;
   emergencyRelation?: string | null;
+  upiIds?: string[] | null;
+  defaultUpiId?: string | null;
 };
 
 function normalizeTimeRange(value?: string | null): string | null {
@@ -143,8 +146,11 @@ export class ProfileService {
         aadhaarVerified: true,
         aadhaarMasked: true,
         aadhaarName: true,
+        dob: true,
+        gender: true,
         livePhotoUrl: true,
         instantAvailable: true,
+        readyNowEnabled: true,
         instantAvailableUntil: true,
         instantCategories: true,
         instantNote: true,
@@ -155,13 +161,21 @@ export class ProfileService {
         emergencyName: true,
         emergencyPhone: true,
         emergencyRelation: true,
+        upiIds: true,
+        defaultUpiId: true,
       },
     });
 
-    // Every admitted user (age 16+) receives the full application experience.
+    const effectiveDob =
+      existingProfile?.aadhaarVerified && existingProfile.dob
+        ? existingProfile.dob
+        : data.dob;
+    enforceAgeRestriction(effectiveDob);
+
+    // Every admitted user (age 18-65) receives the full application experience.
     // Keep the field false for compatibility with the existing database schema.
     const isMinor = false;
-    const instantAvailable =
+    const requestedInstantAvailable =
       data.instantAvailable !== undefined
         ? data.instantAvailable
         : (existingProfile?.instantAvailable ?? false);
@@ -182,6 +196,7 @@ export class ProfileService {
       data.profileVisibility !== undefined
         ? data.profileVisibility
         : (existingProfile?.profileVisibility ?? true);
+    const instantAvailable = profileVisibility && requestedInstantAvailable;
     const notifyRequests =
       data.notifyRequests !== undefined
         ? data.notifyRequests
@@ -204,10 +219,20 @@ export class ProfileService {
       data.emergencyRelation !== undefined
         ? data.emergencyRelation?.trim() || null
         : (existingProfile?.emergencyRelation ?? null);
+    const upiIds = (data.upiIds ?? existingProfile?.upiIds ?? [])
+      .map((value) => value.trim())
+      .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index)
+      .slice(0, 2);
+    const requestedDefaultUpiId = data.defaultUpiId?.trim();
+    const defaultUpiId = upiIds.includes(requestedDefaultUpiId ?? '')
+      ? requestedDefaultUpiId!
+      : upiIds.includes(existingProfile?.defaultUpiId ?? '')
+        ? existingProfile!.defaultUpiId
+        : upiIds[0] ?? null;
 
     const fullWeekDays = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     const fullWeekAvailability = Object.fromEntries(
-      fullWeekDays.map((day) => [day, { start: '00:00', end: '23:59' }]),
+      fullWeekDays.map((day) => [day, { start: '00:00', end: '23:00' }]),
     );
     const isNewProfile = existingProfile === null;
     const incomingAvailabilityIsEmpty =
@@ -218,9 +243,12 @@ export class ProfileService {
     const formattedData = {
       profilePhoto: data.profilePhoto ?? null,
       fullName: data.fullName,
-      dob: data.dob,
+      dob: effectiveDob,
       isMinor,
-      gender: data.gender,
+      gender:
+        existingProfile?.aadhaarVerified && existingProfile.gender
+          ? existingProfile.gender
+          : data.gender,
       location:
         data.location !== undefined
           ? data.location?.trim() || null
@@ -252,7 +280,7 @@ export class ProfileService {
       interests: data.interests ?? [],
       availableDays: useDefaultAvailability ? fullWeekDays : (data.availableDays ?? []),
       availableTimeRange: useDefaultAvailability
-        ? '00:00 - 23:59'
+        ? '00:00 - 23:00'
         : normalizeTimeRange(data.availableTimeRange),
       weeklyAvailability:
         useDefaultAvailability
@@ -278,6 +306,11 @@ export class ProfileService {
       youtube: data.youtube ?? null,
       website: data.website ?? null,
       instantAvailable,
+      readyNowEnabled:
+        profileVisibility &&
+        (data.instantAvailable !== undefined
+          ? data.instantAvailable
+          : (existingProfile?.readyNowEnabled ?? false)),
       instantAvailableUntil: instantAvailable ? instantAvailableUntil : null,
       instantCategories: instantAvailable ? instantCategories : [],
       instantNote: instantAvailable ? instantNote : null,
@@ -288,6 +321,8 @@ export class ProfileService {
       emergencyName,
       emergencyPhone,
       emergencyRelation,
+      upiIds,
+      defaultUpiId,
     };
 
     const profile = await prisma.profile.upsert({
@@ -303,7 +338,8 @@ export class ProfileService {
       data.instantAvailable !== undefined ||
       data.instantAvailableUntil !== undefined ||
       data.instantCategories !== undefined ||
-      data.instantNote !== undefined;
+      data.instantNote !== undefined ||
+      data.profileVisibility !== undefined;
 
     if (instantFieldsTouched) {
       sendGlobalToAll({
@@ -513,7 +549,12 @@ export class ProfileService {
 
   public static async updateReadyNow(
     userId: number,
-    data: { instantAvailable: boolean; latitude?: number; longitude?: number },
+    data: {
+      instantAvailable: boolean;
+      latitude?: number;
+      longitude?: number;
+      timezoneOffsetMinutes?: number;
+    },
   ): Promise<Profile> {
     const existing = await prisma.profile.findUnique({ where: { userId } });
     if (!existing) {
@@ -521,13 +562,55 @@ export class ProfileService {
     }
     const latitude = data.latitude ?? existing.latitude;
     const longitude = data.longitude ?? existing.longitude;
+    if (data.instantAvailable && !existing.profileVisibility) {
+      throw new AppError(
+        'Make your profile public before enabling Ready Now.',
+        409,
+      );
+    }
     if (data.instantAvailable && (latitude == null || longitude == null)) {
       throw new AppError('Location is required to enable Ready Now', 400);
+    }
+    if (data.instantAvailable) {
+      const offsetMs = (data.timezoneOffsetMinutes ?? 0) * 60 * 1000;
+      const localNow = new Date(Date.now() + offsetMs);
+      const start = new Date(
+        Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate()) -
+          offsetMs,
+      );
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      const scheduledMeeting = await prisma.request.findFirst({
+        where: {
+          status: RequestStatus.CONFIRMED,
+          instantBooking: false,
+          fromDateTime: {
+            gte: start,
+            lt: end,
+          },
+          OR: [{ senderId: userId }, { receiverId: userId }],
+          AND: [
+            {
+              OR: [
+                { session: null },
+                { session: { is: { status: { not: SessionStatus.ENDED } } } },
+              ],
+            },
+          ],
+        },
+        select: { id: true },
+      });
+      if (scheduledMeeting) {
+        throw new AppError(
+          'Ready Now is unavailable on a date that already has a scheduled meet.',
+          409,
+        );
+      }
     }
     const profile = await prisma.profile.update({
       where: { userId },
       data: {
         instantAvailable: data.instantAvailable,
+        readyNowEnabled: data.instantAvailable,
         instantAvailableUntil: data.instantAvailable ? existing.instantAvailableUntil : null,
         instantCategories: data.instantAvailable ? existing.instantCategories : [],
         instantNote: data.instantAvailable ? existing.instantNote : null,

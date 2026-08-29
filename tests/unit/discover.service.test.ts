@@ -17,10 +17,16 @@ vi.mock('@/config/database', () => ({
     session: {
       findMany: vi.fn().mockResolvedValue([]),
     },
+    request: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
 describe('DiscoverService', () => {
+  beforeEach(() => {
+    (prisma.request.findMany as any).mockResolvedValue([]);
+  });
   afterEach(() => {
     vi.clearAllMocks();
   });

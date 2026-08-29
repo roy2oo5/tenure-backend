@@ -45,6 +45,9 @@ export class NotificationService {
         select: { fcmToken: true },
       });
       if (user?.fcmToken) {
+        const unreadCount = await prisma.notification.count({
+          where: { userId, read: false },
+        });
         let title = 'New Notification';
         if (kind.startsWith('payment_')) {
           title = 'Payment Update';
@@ -54,11 +57,20 @@ export class NotificationService {
           title = 'Call Notification';
         } else if (kind === 'chat_message' || kind === 'message') {
           title = 'New Message';
+        } else if (kind.startsWith('session_')) {
+          title = 'Meeting Update';
         }
-        sendPushNotification(user.fcmToken, title, message, {
-          kind,
-          notificationId: String(notification.id),
-        }).catch((err) => {
+        sendPushNotification(
+          user.fcmToken,
+          title,
+          message,
+          {
+            kind,
+            notificationId: String(notification.id),
+            unreadCount: String(unreadCount),
+          },
+          unreadCount,
+        ).catch((err) => {
           logger.error('Error in sendPushNotification call:', err);
         });
       }
@@ -72,10 +84,7 @@ export class NotificationService {
   /**
    * List all notifications for a user, with optional category filtering
    */
-  public static async listNotifications(
-    userId: number,
-    filter?: string
-  ): Promise<Notification[]> {
+  public static async listNotifications(userId: number, filter?: string): Promise<Notification[]> {
     const whereClause: any = { userId };
 
     if (filter === 'payments') {
@@ -95,10 +104,7 @@ export class NotificationService {
   /**
    * Mark a specific notification as read
    */
-  public static async markAsRead(
-    userId: number,
-    notificationId: number
-  ): Promise<Notification> {
+  public static async markAsRead(userId: number, notificationId: number): Promise<Notification> {
     const notification = await prisma.notification.findUnique({
       where: { id: notificationId },
     });

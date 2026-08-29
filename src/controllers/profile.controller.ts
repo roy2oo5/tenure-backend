@@ -3,6 +3,7 @@ import { ProfileService } from '../services/profile.service';
 import { AppError } from '../utils/app-error';
 import { prisma } from '../config/database';
 import { processAadhaarCredentialZip } from '../utils/aadhaar-credential';
+import { notifyNearbySupportersChanged } from '../services/websocket.service';
 
 function parseAadhaarDob(value: string): Date | undefined {
   const parts = value.trim().split(/[-/]/);
@@ -456,6 +457,7 @@ export class ProfileController {
         longitude: Number(longitude),
         location: typeof location === 'string' ? location : undefined,
       });
+      await notifyNearbySupportersChanged(req.user.id);
       res.status(200).json({
         status: 'success',
         data: { profile },
@@ -479,14 +481,20 @@ export class ProfileController {
       }
       const latitude = req.body.latitude == null ? undefined : Number(req.body.latitude);
       const longitude = req.body.longitude == null ? undefined : Number(req.body.longitude);
+      const timezoneOffsetMinutes =
+        req.body.timezoneOffsetMinutes == null ? 0 : Number(req.body.timezoneOffsetMinutes);
       if ((latitude !== undefined && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
           (longitude !== undefined && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
         return next(new AppError('Invalid latitude or longitude.', 400));
+      }
+      if (!Number.isInteger(timezoneOffsetMinutes) || Math.abs(timezoneOffsetMinutes) > 14 * 60) {
+        return next(new AppError('Invalid timezone offset.', 400));
       }
       const profile = await ProfileService.updateReadyNow(req.user.id, {
         instantAvailable: req.body.instantAvailable,
         latitude,
         longitude,
+        timezoneOffsetMinutes,
       });
       res.status(200).json({ status: 'success', data: { profile } });
     } catch (error) {

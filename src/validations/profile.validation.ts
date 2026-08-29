@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import {
+  AGE_RESTRICTION_MESSAGE,
+  isAgeAllowed,
+} from '../utils/age-restriction';
 
 const stringArray = z.array(z.string().min(1)).optional().nullable();
 const MAX_HOURLY_RATE = 1199;
-const MIN_PROFILE_AGE = 16;
 const MAX_ABOUT_CHARACTERS = 50;
 const nullableNumber = (schema: z.ZodNumber) =>
   z.preprocess((arg) => {
@@ -11,16 +14,6 @@ const nullableNumber = (schema: z.ZodNumber) =>
     }
     return typeof arg === 'string' ? Number(arg) : arg;
   }, schema.optional().nullable());
-
-function ageFromDob(dob: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const monthDiff = today.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
-}
 
 export const createProfileSchema = z.object({
   body: z.object({
@@ -34,10 +27,7 @@ export const createProfileSchema = z.object({
       z.date({
         required_error: 'Date of birth is required',
         invalid_type_error: 'Invalid date of birth format',
-      }).refine(
-        (dob) => ageFromDob(dob) >= MIN_PROFILE_AGE,
-        `You must be at least ${MIN_PROFILE_AGE} years old to use TenureMate`,
-      ),
+      }).refine(isAgeAllowed, AGE_RESTRICTION_MESSAGE),
     ),
     gender: z.string().min(1, 'Gender is required'),
     location: z.string().optional().nullable(),
@@ -130,6 +120,17 @@ export const createProfileSchema = z.object({
     emergencyName: z.string().optional().nullable(),
     emergencyPhone: z.string().optional().nullable(),
     emergencyRelation: z.string().optional().nullable(),
+    upiIds: z
+      .array(
+        z.string().trim().regex(
+          /^[A-Za-z0-9._-]{2,256}@[A-Za-z]{2,64}$/,
+          'Enter a valid UPI ID',
+        ),
+      )
+      .max(2, 'You can add up to 2 UPI IDs')
+      .optional()
+      .nullable(),
+    defaultUpiId: z.string().trim().optional().nullable(),
   }),
 });
 

@@ -57,7 +57,8 @@ export async function sendPushNotification(
   fcmToken: string,
   title: string,
   body: string,
-  data?: Record<string, string>
+  data?: Record<string, string>,
+  badgeCount?: number,
 ): Promise<void> {
   if (!fcmToken) {
     logger.warn('sendPushNotification called but fcmToken is empty');
@@ -83,8 +84,10 @@ Data: ${JSON.stringify(data || {})}`);
         priority: 'high',
         notification: {
           channelId: 'high_importance_channel',
+          notificationCount: badgeCount,
         },
       },
+      apns: badgeCount == null ? undefined : { payload: { aps: { badge: badgeCount } } },
       data,
     };
 
@@ -92,5 +95,26 @@ Data: ${JSON.stringify(data || {})}`);
     logger.info(`Successfully sent FCM message: ${response}`);
   } catch (error) {
     logger.error(`Error sending FCM message to token ${fcmToken}:`, error);
+  }
+}
+
+export async function sendSilentDataNotification(
+  fcmToken: string,
+  data: Record<string, string>,
+  collapseKey: string,
+): Promise<void> {
+  if (!fcmToken) return;
+  if (!firebaseInitialized) {
+    logger.info(`[FCM Simulation Mode] Silent data notification: ${JSON.stringify(data)}`);
+    return;
+  }
+  try {
+    await getMessaging().send({
+      token: fcmToken,
+      data,
+      android: { priority: 'high', collapseKey },
+    });
+  } catch (error) {
+    logger.error(`Error sending silent FCM command to ${fcmToken}:`, error);
   }
 }

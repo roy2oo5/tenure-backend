@@ -24,6 +24,8 @@ router.post('/:id/session/resume-confirm', SessionController.resumeConfirm);
 router.post('/:id/session/end', SessionController.end);
 router.post('/:id/session/end-confirm', SessionController.endConfirm);
 router.get('/:id/session', SessionController.get);
+router.post('/:id/session/feedback', SessionController.feedback);
+router.post('/:id/session/mock-payment', SessionController.completeMockPayment);
 
 
 

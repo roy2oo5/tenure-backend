@@ -26,6 +26,7 @@ export class UploadController {
   ): Promise<void> {
     try {
       const avatars = await UploadService.listAvatars(req.get('host'), req.protocol);
+      res.set('Cache-Control', 'no-store');
       res.status(200).json({ status: 'success', data: { avatars } });
     } catch (error) {
       next(error);

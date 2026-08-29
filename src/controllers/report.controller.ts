@@ -17,9 +17,17 @@ export class ReportController {
       if (targetId !== null && (!Number.isInteger(targetId) || targetId <= 0)) {
         return next(new AppError('Invalid reported user ID', 400));
       }
+      const requestId =
+        req.body.requestId === null || req.body.requestId === undefined || req.body.requestId === ''
+          ? null
+          : Number(req.body.requestId);
+      if (requestId !== null && (!Number.isInteger(requestId) || requestId <= 0)) {
+        return next(new AppError('Invalid support request ID', 400));
+      }
 
       const report = await ReportService.createReport(req.user.id, {
         targetId,
+        requestId,
         category,
         message,
       });

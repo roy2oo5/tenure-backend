@@ -2,7 +2,6 @@ import { UserService } from '@/services/user.service';
 import { prisma } from '@/config/database';
 import { Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -27,16 +26,19 @@ vi.mock('@/services/websocket.service', () => ({
   sendGlobalToAll: vi.fn(),
 }));
 
+vi.mock('@/services/auth-session.service', () => ({
+  AuthSessionService: {
+    create: vi.fn().mockResolvedValue({
+      token: 'mocked-jwt-token',
+      refreshToken: 'mocked-refresh-token',
+    }),
+  },
+}));
+
 vi.mock('bcryptjs', () => ({
   default: {
     hash: vi.fn().mockResolvedValue('hashedPassword123'),
     compare: vi.fn(),
-  },
-}));
-
-vi.mock('jsonwebtoken', () => ({
-  default: {
-    sign: vi.fn().mockReturnValue('mocked-jwt-token'),
   },
 }));
 
@@ -69,15 +71,11 @@ describe('UserService', () => {
       (prisma.user.findUnique as any).mockResolvedValue(null);
       (prisma.user.create as any).mockResolvedValue(mockDbUser);
 
-      const result = await UserService.register(mockUserData);
+      const result = await UserService.register(mockUserData, 'device-id-123456');
 
       expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: mockUserData.email } });
       expect(bcrypt.hash).toHaveBeenCalledWith(mockUserData.password, 12);
       expect(prisma.user.create).toHaveBeenCalled();
-      expect(jwt.sign).toHaveBeenCalledWith(
-        { id: 123, email: 'test@example.com', role: Role.USER },
-        expect.any(String),
-      );
       expect(result.token).toBe('mocked-jwt-token');
       expect(result.user.email).toBe(mockUserData.email);
       expect(result.user).not.toHaveProperty('password');
@@ -97,7 +95,7 @@ describe('UserService', () => {
 
       (prisma.user.findUnique as any).mockResolvedValue(existingUser);
 
-      await expect(UserService.register(mockUserData)).rejects.toThrow('Email address is already registered');
+      await expect(UserService.register(mockUserData, 'device-id-123456')).rejects.toThrow('Email address is already registered');
     });
   });
 
@@ -123,7 +121,7 @@ describe('UserService', () => {
         lastLoginAt: new Date(),
       });
 
-      const result = await UserService.authenticateByPhone('9876543210');
+      const result = await UserService.authenticateByPhone('9876543210', 'device-id-123456');
 
       expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { phone: '9876543210' } });
       expect(prisma.user.create).not.toHaveBeenCalled();
@@ -147,7 +145,7 @@ describe('UserService', () => {
       (prisma.user.findUnique as any).mockResolvedValue(null);
       (prisma.user.create as any).mockResolvedValue(newUser);
 
-      const result = await UserService.authenticateByPhone('9876543210');
+      const result = await UserService.authenticateByPhone('9876543210', 'device-id-123456');
 
       expect(prisma.user.create).toHaveBeenCalled();
       expect(result.user.phone).toBe('9876543210');
@@ -176,7 +174,7 @@ describe('UserService', () => {
         lastLoginAt: new Date(),
       });
 
-      const result = await UserService.authenticateByPhone('9876543210');
+      const result = await UserService.authenticateByPhone('9876543210', 'device-id-123456');
 
       expect(prisma.user.update).toHaveBeenCalledWith({
         where: { id: deactivatedUser.id },
@@ -184,7 +182,7 @@ describe('UserService', () => {
           isActive: true,
           authVersion: { increment: 1 },
           lastLoginAt: expect.any(Date),
-          activeDeviceId: null,
+          activeDeviceId: 'device-id-123456',
         },
       });
       expect(result.user.isActive).toBe(true);
@@ -229,7 +227,7 @@ describe('UserService', () => {
       (prisma.user.findUnique as any).mockResolvedValue(activeUser);
       (bcrypt.compare as any).mockResolvedValue(true);
 
-      const result = await UserService.login({ email: 'test@example.com', password: 'password123' });
+      const result = await UserService.login({ email: 'test@example.com', password: 'password123' }, 'device-id-123456');
 
       expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'test@example.com' } });
       expect(prisma.user.update).not.toHaveBeenCalled();
@@ -254,7 +252,7 @@ describe('UserService', () => {
         isActive: true,
       });
 
-      const result = await UserService.login({ email: 'test@example.com', password: 'password123' });
+      const result = await UserService.login({ email: 'test@example.com', password: 'password123' }, 'device-id-123456');
 
       expect(prisma.user.update).toHaveBeenCalledWith({
         where: { id: deactivatedUser.id },

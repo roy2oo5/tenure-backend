@@ -13,38 +13,39 @@ enum Role {
 }
 
 model User {
-  id               Int            @id @default(autoincrement())
-  tenureId         String?        @unique @map("tenure_id")
-  email            String?        @unique
-  phone            String?        @unique @map("phone")
-  password         String?
-  name             String?
-  role             Role           @default(USER)
-  fcmToken         String?        @map("fcm_token")
-  isActive         Boolean        @default(true) @map("is_active")
-  authVersion      Int            @default(0) @map("auth_version")
-  lastLoginAt      DateTime?      @map("last_login_at")
-  activeDeviceId   String?        @map("active_device_id")
-  profile          Profile?
-  sentRequests     Request[]      @relation("SentRequests")
-  receivedRequests Request[]      @relation("ReceivedRequests")
-  sentMessages     Message[]      @relation("SentMessages")
-  receivedMessages Message[]      @relation("ReceivedMessages")
-  notifications    Notification[]
-  savedMates       SavedMate[]    @relation("SavedByUser")
-  savedByUsers     SavedMate[]    @relation("SavedMateUser")
-  blocksSent       Block[]        @relation("UserBlocks")
-  blocksReceived   Block[]        @relation("UserBlockedBy")
-  mutesSent        Mute[]         @relation("UserMutes")
-  mutesReceived    Mute[]         @relation("UserMutedBy")
-  reportsSent      Report[]       @relation("ReportedBy")
-  reportsReceived  Report[]       @relation("ReportedUser")
-  callsSent        Call[]         @relation("CallsSent")
-  callsReceived    Call[]         @relation("CallsReceived")
-  savedAddresses   SavedAddress[]
+  id                             Int                             @id @default(autoincrement())
+  tenureId                       String?                         @unique @map("tenure_id")
+  email                          String?                         @unique
+  phone                          String?                         @unique @map("phone")
+  password                       String?
+  name                           String?
+  role                           Role                            @default(USER)
+  fcmToken                       String?                         @map("fcm_token")
+  isActive                       Boolean                         @default(true) @map("is_active")
+  authVersion                    Int                             @default(0) @map("auth_version")
+  lastLoginAt                    DateTime?                       @map("last_login_at")
+  activeDeviceId                 String?                         @map("active_device_id")
+  profile                        Profile?
+  sentRequests                   Request[]                       @relation("SentRequests")
+  receivedRequests               Request[]                       @relation("ReceivedRequests")
+  sentMessages                   Message[]                       @relation("SentMessages")
+  receivedMessages               Message[]                       @relation("ReceivedMessages")
+  notifications                  Notification[]
+  savedMates                     SavedMate[]                     @relation("SavedByUser")
+  savedByUsers                   SavedMate[]                     @relation("SavedMateUser")
+  blocksSent                     Block[]                         @relation("UserBlocks")
+  blocksReceived                 Block[]                         @relation("UserBlockedBy")
+  mutesSent                      Mute[]                          @relation("UserMutes")
+  mutesReceived                  Mute[]                          @relation("UserMutedBy")
+  reportsSent                    Report[]                        @relation("ReportedBy")
+  reportsReceived                Report[]                        @relation("ReportedUser")
+  callsSent                      Call[]                          @relation("CallsSent")
+  callsReceived                  Call[]                          @relation("CallsReceived")
+  savedAddresses                 SavedAddress[]
   aadhaarCredentialVerifications AadhaarCredentialVerification[]
-  createdAt        DateTime       @default(now()) @map("created_at")
-  updatedAt        DateTime       @updatedAt @map("updated_at")
+  authSessions                   AuthSession[]
+  createdAt                      DateTime                        @default(now()) @map("created_at")
+  updatedAt                      DateTime                        @updatedAt @map("updated_at")
 
   @@map("users")
 }
@@ -99,6 +100,7 @@ model Profile {
   youtube                String?
   website                String?
   instantAvailable       Boolean   @default(false) @map("instant_available")
+  readyNowEnabled        Boolean   @default(false) @map("ready_now_enabled")
   instantAvailableUntil  DateTime? @map("instant_available_until")
   instantCategories      String[]  @default([]) @map("instant_categories")
   instantNote            String?   @map("instant_note")
@@ -109,6 +111,8 @@ model Profile {
   emergencyName          String?   @map("emergency_name")
   emergencyPhone         String?   @map("emergency_phone")
   emergencyRelation      String?   @map("emergency_relation")
+  upiIds                 String[]  @default([]) @map("upi_ids")
+  defaultUpiId           String?   @map("default_upi_id")
   createdAt              DateTime  @default(now()) @map("created_at")
   updatedAt              DateTime  @updatedAt @map("updated_at")
 
@@ -127,65 +131,105 @@ enum RequestStatus {
 }
 
 model Request {
-  id                      Int           @id @default(autoincrement())
-  senderId                Int           @map("sender_id")
-  receiverId              Int           @map("receiver_id")
-  sender                  User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver                User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
-  categoryId              String        @map("category_id")
-  categoryLabel           String        @map("category_label")
-  meetLocation            String        @map("meet_location")
-  meetLocationLatitude    Float?        @map("meet_location_latitude")
-  meetLocationLongitude   Float?        @map("meet_location_longitude")
-  fromDateTime            DateTime      @map("from_date_time")
-  toDateTime              DateTime?     @map("to_date_time")
-  instantBooking          Boolean       @default(false) @map("instant_booking")
-  responseDeadlineAt      DateTime?     @map("response_deadline_at")
-  message                 String?       @default("")
-  bookingFor              String        @default("self") @map("booking_for")
-  beneficiaryName         String?       @map("beneficiary_name")
-  beneficiaryPhone        String?       @map("beneficiary_phone")
-  beneficiaryRelation     String?       @map("beneficiary_relation")
-  beneficiaryNote         String?       @map("beneficiary_note")
-  readyToPayTravelCharges Boolean       @default(false) @map("ready_to_pay_travel_charges")
-  readyToPayTip           Boolean       @default(false) @map("ready_to_pay_tip")
-  quotedHourlyRate        Float?        @map("quoted_hourly_rate")
-  status                  RequestStatus @default(PENDING)
-  messages                Message[]     @relation("RequestMessages")
-  session                 Session?
-  otp                     String?       @map("otp")
-  senderCurrentLatitude   Float?        @map("sender_current_latitude")
-  senderCurrentLongitude  Float?        @map("sender_current_longitude")
-  senderLocationUpdatedAt DateTime?     @map("sender_location_updated_at")
-  receiverCurrentLatitude Float?        @map("receiver_current_latitude")
-  receiverCurrentLongitude Float?       @map("receiver_current_longitude")
-  receiverLocationUpdatedAt DateTime?   @map("receiver_location_updated_at")
-  cancelledAt             DateTime?     @map("cancelled_at")
-  cancelledById           Int?          @map("cancelled_by_id")
-  cancellationFee         Float         @default(0) @map("cancellation_fee")
-  cancellationFeeReason   String?       @map("cancellation_fee_reason")
-  createdAt               DateTime      @default(now()) @map("created_at")
-  updatedAt               DateTime      @updatedAt @map("updated_at")
+  id                        Int           @id @default(autoincrement())
+  senderId                  Int           @map("sender_id")
+  receiverId                Int           @map("receiver_id")
+  sender                    User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver                  User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+  categoryId                String        @map("category_id")
+  categoryLabel             String        @map("category_label")
+  meetLocation              String        @map("meet_location")
+  meetLocationLatitude      Float?        @map("meet_location_latitude")
+  meetLocationLongitude     Float?        @map("meet_location_longitude")
+  fromDateTime              DateTime      @map("from_date_time")
+  toDateTime                DateTime?     @map("to_date_time")
+  timezoneOffsetMinutes     Int           @default(0) @map("timezone_offset_minutes")
+  instantBooking            Boolean       @default(false) @map("instant_booking")
+  responseDeadlineAt        DateTime?     @map("response_deadline_at")
+  message                   String?       @default("")
+  bookingFor                String        @default("self") @map("booking_for")
+  beneficiaryName           String?       @map("beneficiary_name")
+  beneficiaryPhone          String?       @map("beneficiary_phone")
+  beneficiaryRelation       String?       @map("beneficiary_relation")
+  beneficiaryNote           String?       @map("beneficiary_note")
+  readyToPayTravelCharges   Boolean       @default(false) @map("ready_to_pay_travel_charges")
+  readyToPayTip             Boolean       @default(false) @map("ready_to_pay_tip")
+  needsMateVehicle          Boolean       @default(false) @map("needs_mate_vehicle")
+  offersRequesterVehicle    Boolean       @default(false) @map("offers_requester_vehicle")
+  quotedHourlyRate          Float?        @map("quoted_hourly_rate")
+  status                    RequestStatus @default(PENDING)
+  messages                  Message[]     @relation("RequestMessages")
+  reports                   Report[]
+  session                   Session?
+  otp                       String?       @map("otp")
+  senderCurrentLatitude     Float?        @map("sender_current_latitude")
+  senderCurrentLongitude    Float?        @map("sender_current_longitude")
+  senderLocationUpdatedAt   DateTime?     @map("sender_location_updated_at")
+  receiverCurrentLatitude   Float?        @map("receiver_current_latitude")
+  receiverCurrentLongitude  Float?        @map("receiver_current_longitude")
+  receiverLocationUpdatedAt DateTime?     @map("receiver_location_updated_at")
+  cancelledAt               DateTime?     @map("cancelled_at")
+  cancelledById             Int?          @map("cancelled_by_id")
+  cancellationFee           Float         @default(0) @map("cancellation_fee")
+  cancellationFeeReason     String?       @map("cancellation_fee_reason")
+  createdAt                 DateTime      @default(now()) @map("created_at")
+  updatedAt                 DateTime      @updatedAt @map("updated_at")
 
   @@map("requests")
 }
 
 model Message {
-  id            Int      @id @default(autoincrement())
-  requestId     Int      @map("request_id")
-  senderId      Int      @map("sender_id")
-  receiverId    Int      @map("receiver_id")
-  content       String
-  type          String   @default("text") // 'text', 'image', 'voice'
-  mediaUrl      String?  @map("media_url")
-  voiceDuration Int?     @map("voice_duration")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id              Int       @id @default(autoincrement())
+  clientMessageId String    @unique @default(uuid()) @map("client_message_id")
+  requestId       Int       @map("request_id")
+  senderId        Int       @map("sender_id")
+  receiverId      Int       @map("receiver_id")
+  content         String
+  type            String    @default("text") // 'text', 'image', 'voice'
+  mediaUrl        String?   @map("media_url")
+  voiceDuration   Int?      @map("voice_duration")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  expiresAt       DateTime  @default(dbgenerated("(CURRENT_TIMESTAMP + '1 month'::interval)")) @map("expires_at")
+  isDeleted       Boolean   @default(false) @map("is_deleted")
+  deletedAt       DateTime? @map("deleted_at")
 
-  request  Request @relation("RequestMessages", fields: [requestId], references: [id], onDelete: Cascade)
-  sender   User    @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver User    @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  request     Request             @relation("RequestMessages", fields: [requestId], references: [id], onDelete: Cascade)
+  sender      User                @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User                @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  undelivered UndeliveredMessage?
 
+  @@index([expiresAt])
   @@map("messages")
+}
+
+model UndeliveredMessage {
+  id          String   @id @default(uuid())
+  messageId   String   @unique @map("message_id")
+  chatRoomId  String   @map("chat_room_id")
+  senderId    Int      @map("sender_id")
+  recipientId Int      @map("recipient_id")
+  payload     Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  message     Message  @relation(fields: [messageId], references: [clientMessageId], onDelete: Cascade)
+
+  @@index([recipientId, createdAt])
+  @@map("undelivered_messages")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  userId           Int       @map("user_id")
+  deviceId         String    @map("device_id")
+  refreshTokenHash String    @unique @map("refresh_token_hash")
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
 }
 
 enum SessionStatus {
@@ -209,6 +253,16 @@ model Session {
   lastTimerStart      DateTime?     @map("last_timer_start")
   lastActionBy        Int?          @map("last_action_by")
   endReason           String?       @map("end_reason")
+  senderRating        Int?          @map("sender_rating")
+  senderReview        String?       @map("sender_review")
+  senderRatedAt       DateTime?     @map("sender_rated_at")
+  receiverRating      Int?          @map("receiver_rating")
+  receiverReview      String?       @map("receiver_review")
+  receiverRatedAt     DateTime?     @map("receiver_rated_at")
+  paymentCompletedBy  Int?          @map("payment_completed_by")
+  paymentUpiId        String?       @map("payment_upi_id")
+  paymentMode         String?       @map("payment_mode")
+  paymentCompletedAt  DateTime?     @map("payment_completed_at")
 
   request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -300,16 +354,22 @@ model Mute {
 }
 
 model Report {
-  id         Int      @id @default(autoincrement())
-  reporterId Int      @map("reporter_id")
-  targetId   Int?     @map("target_id")
-  category   String
-  message    String
-  createdAt  DateTime @default(now()) @map("created_at")
+  id          Int       @id @default(autoincrement())
+  reporterId  Int       @map("reporter_id")
+  targetId    Int?      @map("target_id")
+  requestId   Int?      @map("request_id")
+  category    String
+  message     String
+  adminStatus String    @default("PENDING") @map("admin_status")
+  resolvedAt  DateTime? @map("resolved_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
-  reporter User  @relation("ReportedBy", fields: [reporterId], references: [id], onDelete: Cascade)
-  target   User? @relation("ReportedUser", fields: [targetId], references: [id], onDelete: Cascade)
+  reporter User     @relation("ReportedBy", fields: [reporterId], references: [id], onDelete: Cascade)
+  target   User?    @relation("ReportedUser", fields: [targetId], references: [id], onDelete: Cascade)
+  request  Request? @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
+  @@unique([reporterId, requestId])
+  @@index([requestId])
   @@map("reports")
 }
 
@@ -321,6 +381,33 @@ model Category {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("categories")
+}
+
+model AdminSession {
+  id        String    @id @default(uuid())
+  username  String
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([username, expiresAt])
+  @@map("admin_sessions")
+}
+
+model PlatformSettings {
+  id                 Int      @id @default(1)
+  maintenanceMode    Boolean  @default(false) @map("maintenance_mode")
+  maintenanceMessage String   @default("The app is currently under maintenance. Please try again later.") @map("maintenance_message")
+  minIosVersion      String   @default("2.4.1") @map("min_ios_version")
+  minAndroidVersion  String   @default("2.4.0") @map("min_android_version")
+  appStoreUrl        String   @default("") @map("app_store_url")
+  playStoreUrl       String   @default("") @map("play_store_url")
+  forceUpdate        Boolean  @default(false) @map("force_update")
+  requireAadhaar     Boolean  @default(true) @map("require_aadhaar")
+  requireLivePhoto   Boolean  @default(false) @map("require_live_photo")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
 }
 
 model Qualification {
@@ -356,6 +443,9 @@ enum CallStatus {
   COMPLETED
   REJECTED
   MISSED
+  BUSY
+  CANCELLED
+  FAILED
 }
 
 model Call {
@@ -366,11 +456,12 @@ model Call {
   startedAt  DateTime?  @map("started_at")
   endedAt    DateTime?  @map("ended_at")
   duration   Int?       @default(0)
+  endReason  String?    @map("end_reason")
   createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @default(now()) @updatedAt @map("updated_at")
 
   caller   User @relation("CallsSent", fields: [callerId], references: [id], onDelete: Cascade)
   receiver User @relation("CallsReceived", fields: [receiverId], references: [id], onDelete: Cascade)
 
   @@map("calls")
 }
-

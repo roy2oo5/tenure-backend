@@ -69,10 +69,10 @@ export function decompressQrPayload(compressedBytes: Buffer): Buffer {
   } catch (zlibError) {
     try {
       return zlib.inflateRawSync(inputBuffer);
-    } catch (rawError) {
+    } catch {
       try {
         return zlib.unzipSync(inputBuffer);
-      } catch (unzipError) {
+      } catch {
         const detail = zlibError instanceof Error ? zlibError.message : String(zlibError);
         throw new Error(`Zlib decompression failed: Unable to decompress QR payload. ${detail}`);
       }
@@ -212,7 +212,7 @@ export function verifyAadhaarSignature(
       },
       signature
     );
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -343,7 +343,7 @@ export function getUidaiPublicKeyPem(): string | undefined {
   if (fs.existsSync(certPath)) {
     try {
       return fs.readFileSync(certPath, 'utf-8');
-    } catch (_) {
+    } catch {
       return undefined;
     }
   }
@@ -408,7 +408,7 @@ export function extractQrBytesFromImageBuffer(imageBuffer: Buffer): Buffer {
     if (result && result.getRawBytes() && result.getRawBytes().length > 0) {
       return Buffer.from(result.getRawBytes());
     }
-  } catch (err) {
+  } catch {
     // If ZXing fails to decode image, return original imageBuffer for zlib fallback
   }
 

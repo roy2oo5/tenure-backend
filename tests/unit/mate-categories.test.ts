@@ -11,4 +11,10 @@ describe('mate category matching', () => {
     expect(profileMatchesCategory(['Shopping Support'], 'Shopping Support')).toBe(true);
     expect(profileMatchesCategory(['Shopping Support'], 'Hospital Support')).toBe(false);
   });
+
+  it('recognizes Tech & Education Support and its common aliases', () => {
+    expect(profileMatchesCategory(['Tech & Education Support'], 'tech-education')).toBe(true);
+    expect(profileMatchesCategory(['Tech & Education Support'], 'technology support')).toBe(true);
+    expect(profileMatchesCategory(['Shopping Support'], 'Tech & Education Support')).toBe(false);
+  });
 });

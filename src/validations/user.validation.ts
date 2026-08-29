@@ -5,15 +5,10 @@ export const phoneAuthSchema = z.object({
   body: z
     .object({
       phone: z.string().min(10, 'Phone number is required').max(15, 'Phone number is too long'),
-      accessToken: z.string().optional(),
-      deviceId: z.string().min(16).max(128).optional(),
-      reqId: z.string().optional(),
-      otp: z.string().optional(),
+      accessToken: z.string().min(20),
+      deviceId: z.string().min(16).max(128),
     })
-    .refine((body) => body.accessToken || (body.reqId && body.otp), {
-      message: 'Provide either OTP access token or reqId with otp',
-      path: ['accessToken'],
-    }),
+    ,
 });
 
 export const registerSchema = z.object({
@@ -22,14 +17,16 @@ export const registerSchema = z.object({
     password: z.string().min(8, 'Password must be at least 8 characters long'),
     name: z.string().optional(),
     phone: z.string().optional(),
-    role: z.nativeEnum(Role).optional(),
+      role: z.nativeEnum(Role).optional(),
+      deviceId: z.string().min(16).max(128),
   }),
 });
 
 export const loginSchema = z.object({
   body: z.object({
     email: z.string().email('Please provide a valid email address'),
-    password: z.string().min(1, 'Password is required'),
+      password: z.string().min(1, 'Password is required'),
+      deviceId: z.string().min(16).max(128),
   }),
 });
 
@@ -37,8 +34,13 @@ export const updateUserSchema = z.object({
   body: z.object({
     email: z.string().email('Please provide a valid email address').optional(),
     name: z.string().optional(),
-    phone: z.string().optional(),
-    role: z.nativeEnum(Role).optional(),
     fcmToken: z.string().optional(),
+  }),
+});
+
+export const refreshSessionSchema = z.object({
+  body: z.object({
+    refreshToken: z.string().min(32).max(512),
+    deviceId: z.string().min(16).max(128),
   }),
 });

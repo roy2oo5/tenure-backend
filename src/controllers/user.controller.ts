@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { UserService } from '../services/user.service';
 import { SessionService } from '../services/session.service';
-import { Msg91Service } from '../services/msg91.service';
 import { AppError } from '../utils/app-error';
+import { AuthSessionService } from '../services/auth-session.service';
 
 export class UserController {
   public static async phoneLoginStatus(
@@ -23,8 +23,8 @@ export class UserController {
 
   public static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { email, password, name, role, phone } = req.body;
-      const result = await UserService.register({ email, password, name, role, phone });
+      const { email, password, name, role, phone, deviceId } = req.body;
+      const result = await UserService.register({ email, password, name, role, phone }, deviceId);
       res.status(201).json({
         status: 'success',
         data: result,
@@ -36,8 +36,8 @@ export class UserController {
 
   public static async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { email, password } = req.body;
-      const result = await UserService.login({ email, password });
+      const { email, password, deviceId } = req.body;
+      const result = await UserService.login({ email, password }, deviceId);
       res.status(200).json({
         status: 'success',
         data: result,
@@ -49,12 +49,7 @@ export class UserController {
 
   public static async phoneAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { phone, accessToken, reqId, otp, deviceId } = req.body;
-      if (accessToken) {
-        await Msg91Service.verifyAccessToken(accessToken, phone);
-      } else {
-        await Msg91Service.verifyOtp(reqId, otp);
-      }
+      const { phone, deviceId } = req.body;
       const result = await UserService.authenticateByPhone(phone, deviceId);
       res.status(200).json({
         status: 'success',
@@ -80,10 +75,26 @@ export class UserController {
     }
   }
 
+  public static async refreshSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = await AuthSessionService.refresh(req.body.refreshToken, req.body.deviceId);
+      const { password: _, ...user } = result.user;
+      res.status(200).json({
+        status: 'success',
+        data: { token: result.token, refreshToken: result.refreshToken, user },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) {
         return next(new AppError('You are not authenticated.', 401));
+      }
+      if (req.authSessionId) {
+        await AuthSessionService.revoke(req.authSessionId, req.user.id);
       }
       await UserService.logout(req.user.id);
       res.status(200).json({ status: 'success', data: null });

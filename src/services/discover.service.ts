@@ -1,4 +1,4 @@
-import { Prisma, Profile, SessionStatus } from '@prisma/client';
+import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { prisma } from '../config/database';
 import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
 import { AppError } from '../utils/app-error';
@@ -22,6 +22,7 @@ export type DiscoverMateResult = {
   tenureId: string;
   fullName: string;
   profilePhoto: string | null;
+  location: string | null;
   district: string;
   state: string;
   gender: string | null;
@@ -59,6 +60,7 @@ export type DiscoverMateResult = {
   saved: boolean;
   busyToday: boolean;
   activeSessionStatus: SessionStatus | null;
+  scheduledMeets: Array<{ fromDateTime: string; toDateTime: string | null }>;
 };
 
 type PublicProfile = Profile & {
@@ -249,10 +251,7 @@ function isInstantDiscoverableProfile(profile: Profile): boolean {
 
 function getProfileAvatar(profile: Profile): string | null {
   const profilePhoto = profile.profilePhoto?.trim();
-  if (profilePhoto) {
-    return profilePhoto;
-  }
-  return profile.gallery.find((uri) => uri.trim()) ?? null;
+  return profilePhoto || null;
 }
 
 function hasUserProvidedEmail(email?: string | null): boolean {
@@ -280,7 +279,9 @@ function matchesLanguages(profile: Profile, selectedLanguages?: string[]): boole
     return true;
   }
 
-  const profileLanguages = new Set((profile.languages ?? []).map(normalizeLanguage).filter(Boolean));
+  const profileLanguages = new Set(
+    (profile.languages ?? []).map(normalizeLanguage).filter(Boolean),
+  );
   return selected.some((language) => profileLanguages.has(language));
 }
 
@@ -304,7 +305,9 @@ function toDiscoverMate(
   activeSessionByUserId = new Map<number, SessionStatus>(),
 ): DiscoverMateResult {
   const category = displayCategory(profile, input.category);
-  const gallery = profile.gallery ?? [];
+  const gallery = (profile.gallery ?? []).filter(
+    (uri) => !uri.toLowerCase().includes('live-photo'),
+  );
   const livePhotoAdded =
     Boolean(profile.livePhotoUrl?.trim()) ||
     gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
@@ -314,6 +317,7 @@ function toDiscoverMate(
     tenureId: profile.user?.tenureId ?? 'Not assigned',
     fullName: profile.fullName,
     profilePhoto: getProfileAvatar(profile),
+    location: profile.location,
     district: profile.district,
     state: profile.state,
     gender: profile.gender,
@@ -356,6 +360,7 @@ function toDiscoverMate(
     saved: savedMateIds.has(profile.userId),
     busyToday: activeSessionStatus != null,
     activeSessionStatus,
+    scheduledMeets: [],
   };
 }
 
@@ -393,6 +398,28 @@ async function activeSessionStatusesForUsers(
     }
     if (userIds.includes(session.receiverId)) {
       statuses.set(session.receiverId, session.status);
+    }
+  }
+
+  const confirmedReadyNowRequests = await prisma.request.findMany({
+    where: {
+      instantBooking: true,
+      status: RequestStatus.CONFIRMED,
+      OR: [{ senderId: { in: userIds } }, { receiverId: { in: userIds } }],
+      AND: [
+        {
+          OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
+        },
+      ],
+    },
+    select: { senderId: true, receiverId: true },
+  });
+  for (const request of confirmedReadyNowRequests) {
+    if (userIds.includes(request.senderId) && !statuses.has(request.senderId)) {
+      statuses.set(request.senderId, SessionStatus.RUNNING);
+    }
+    if (userIds.includes(request.receiverId) && !statuses.has(request.receiverId)) {
+      statuses.set(request.receiverId, SessionStatus.RUNNING);
     }
   }
   return statuses;
@@ -455,8 +482,7 @@ export class DiscoverService {
     );
     return results.sort(
       (a, b) =>
-        (a.distanceKm ?? Number.POSITIVE_INFINITY) -
-        (b.distanceKm ?? Number.POSITIVE_INFINITY),
+        (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY),
     );
   }
 
@@ -496,7 +522,29 @@ export class DiscoverService {
 
     const savedMateIds = await savedMateIdsForUser(currentUserId);
     const activeSessionByUserId = await activeSessionStatusesForUsers([targetUserId]);
-    return toDiscoverMate(profile, {}, savedMateIds, activeSessionByUserId);
+    const result = toDiscoverMate(profile, {}, savedMateIds, activeSessionByUserId);
+    const scheduledMeets = await prisma.request.findMany({
+      where: {
+        OR: [{ senderId: targetUserId }, { receiverId: targetUserId }],
+        instantBooking: false,
+        status: RequestStatus.CONFIRMED,
+        fromDateTime: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+        AND: [
+          {
+            OR: [{ toDateTime: null }, { toDateTime: { gt: new Date() } }],
+          },
+        ],
+      },
+      orderBy: { fromDateTime: 'asc' },
+      select: { fromDateTime: true, toDateTime: true },
+    });
+    return {
+      ...result,
+      scheduledMeets: scheduledMeets.map((meet) => ({
+        fromDateTime: meet.fromDateTime.toISOString(),
+        toDateTime: meet.toDateTime?.toISOString() ?? null,
+      })),
+    };
   }
 
   public static async getInstantMates(
@@ -555,8 +603,7 @@ export class DiscoverService {
     );
     return results.sort(
       (a, b) =>
-        (a.distanceKm ?? Number.POSITIVE_INFINITY) -
-        (b.distanceKm ?? Number.POSITIVE_INFINITY),
+        (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY),
     );
   }
 

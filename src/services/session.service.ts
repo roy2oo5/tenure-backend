@@ -6,8 +6,12 @@ import { sendToUser, sendGlobalToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 import { CONFIRMED_REQUEST_EXPIRY_WINDOW_MS } from './request.service';
+import { restoreReadyNow } from './ready-now.service';
 
 const MAX_SESSION_SECONDS = 12 * 60 * 60;
+const AUTO_PAUSE_RETRY_MS = 60_000;
+let autoPauseTimer: NodeJS.Timeout | null = null;
+let scheduledAutoPauseAt: number | null = null;
 
 export type MappedSession = {
   id: number;
@@ -26,8 +30,18 @@ export type MappedSession = {
   mateAvatar: string;
   hourlyRate: number;
   billingAmount: number;
+  paymentReceiverUpiId: string | null;
   lastActionBy: number | null;
   endReason: string | null;
+  postMeet: {
+    rating: number | null;
+    review: string | null;
+    ratedAt: number | null;
+    paymentCompleted: boolean;
+    paymentUpiId: string | null;
+    paymentMode: string | null;
+    paidAt: number | null;
+  };
 };
 
 function categoryRatesRecord(value: Profile['categoryRates']): Record<string, number> {
@@ -54,10 +68,10 @@ function hourlyRateForRequest(
   if (requestedCategory) {
     const variants = new Set([
       requestedCategory,
-      ...getCategoryMatchVariants(categoryLabel ?? '').map(value => value.toLowerCase()),
+      ...getCategoryMatchVariants(categoryLabel ?? '').map((value) => value.toLowerCase()),
     ]);
-    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(
-      ([category]) => variants.has(category.trim().toLowerCase()),
+    const matched = Object.entries(categoryRatesRecord(profile.categoryRates)).find(([category]) =>
+      variants.has(category.trim().toLowerCase()),
     );
     if (matched) {
       return matched[1];
@@ -134,7 +148,8 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
     startedAt: session.startedAt.getTime(),
     endedAt: session.endedAt ? session.endedAt.getTime() : null,
     fromDateTime: request?.fromDateTime?.toISOString() ?? session.startedAt.toISOString(),
-    toDateTime: request?.toDateTime?.toISOString() ?? (session.endedAt ?? session.startedAt).toISOString(),
+    toDateTime:
+      request?.toDateTime?.toISOString() ?? (session.endedAt ?? session.startedAt).toISOString(),
     elapsedSec,
     mateUserId: partnerId,
     mateName: partner?.profile?.fullName ?? partner?.name ?? 'Anonymous',
@@ -142,20 +157,222 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
     mateAvatar: partner?.profile?.profilePhoto ?? '',
     hourlyRate,
     billingAmount,
+    paymentReceiverUpiId: isSender ? (partner?.profile?.defaultUpiId ?? null) : null,
     lastActionBy: session.lastActionBy,
     endReason: session.endReason ?? null,
+    postMeet: {
+      rating: isSender ? (session.senderRating ?? null) : (session.receiverRating ?? null),
+      review: isSender ? (session.senderReview ?? null) : (session.receiverReview ?? null),
+      ratedAt: (isSender ? session.senderRatedAt : session.receiverRatedAt)?.getTime() ?? null,
+      paymentCompleted: session.paymentCompletedAt != null,
+      paymentUpiId: session.paymentUpiId ?? null,
+      paymentMode: session.paymentMode ?? null,
+      paidAt: session.paymentCompletedAt?.getTime() ?? null,
+    },
   };
 }
 
-function broadcastSessionUpdate(session: any, mappedForSender: MappedSession, mappedForReceiver: MappedSession) {
+function broadcastSessionUpdate(
+  session: any,
+  mappedForSender: MappedSession,
+  mappedForReceiver: MappedSession,
+) {
   sendToUser(session.senderId, { event: 'session_update', session: mappedForSender });
   sendToUser(session.receiverId, { event: 'session_update', session: mappedForReceiver });
   sendGlobalToUser(session.senderId, { event: 'session_updated' });
   sendGlobalToUser(session.receiverId, { event: 'session_updated' });
 }
 
+function armSessionAutoPause(deadline: Date): void {
+  const wakeAt = deadline.getTime();
+  if (autoPauseTimer && scheduledAutoPauseAt !== null && scheduledAutoPauseAt <= wakeAt) {
+    return;
+  }
+  if (autoPauseTimer) clearTimeout(autoPauseTimer);
+  scheduledAutoPauseAt = wakeAt;
+  autoPauseTimer = setTimeout(
+    () => {
+      autoPauseTimer = null;
+      scheduledAutoPauseAt = null;
+      void runSessionAutoPauseAndScheduleNext();
+    },
+    Math.max(0, wakeAt - Date.now()),
+  );
+  autoPauseTimer.unref();
+}
+
+async function runSessionAutoPauseAndScheduleNext(): Promise<void> {
+  try {
+    await SessionService.autoPauseOverdueSessions();
+    const activeSessions = await prisma.session.findMany({
+      where: {
+        status: {
+          in: [
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSE_REQUESTED,
+            SessionStatus.RESUME_REQUESTED,
+            SessionStatus.END_REQUESTED,
+          ],
+        },
+        lastTimerStart: { not: null },
+      },
+      select: { lastTimerStart: true, totalElapsedSeconds: true },
+    });
+    const nextDeadline = activeSessions.reduce<Date | null>((earliest, session) => {
+      if (!session.lastTimerStart) return earliest;
+      const remainingSeconds = Math.max(0, MAX_SESSION_SECONDS - session.totalElapsedSeconds);
+      const deadline = new Date(session.lastTimerStart.getTime() + remainingSeconds * 1000);
+      return !earliest || deadline < earliest ? deadline : earliest;
+    }, null);
+    if (nextDeadline) armSessionAutoPause(nextDeadline);
+  } catch (error) {
+    console.error('Session auto-pause failed:', error);
+    armSessionAutoPause(new Date(Date.now() + AUTO_PAUSE_RETRY_MS));
+  }
+}
+
+export function scheduleSessionAutoPause(lastTimerStart: Date, totalElapsedSeconds = 0): void {
+  const remainingSeconds = Math.max(0, MAX_SESSION_SECONDS - totalElapsedSeconds);
+  armSessionAutoPause(new Date(lastTimerStart.getTime() + remainingSeconds * 1000));
+}
+
+export function startSessionAutoPauseScheduler(): void {
+  void runSessionAutoPauseAndScheduleNext();
+}
+
 export class SessionService {
-  public static async startSession(userId: number, requestId: number, _otp: string): Promise<MappedSession> {
+  public static async autoPauseOverdueSessions(now = new Date()): Promise<number> {
+    const activeSessions = await prisma.session.findMany({
+      where: {
+        status: {
+          in: [
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSE_REQUESTED,
+            SessionStatus.RESUME_REQUESTED,
+            SessionStatus.END_REQUESTED,
+          ],
+        },
+        lastTimerStart: { not: null },
+      },
+    });
+    let pausedCount = 0;
+
+    for (const session of activeSessions) {
+      if (!session.lastTimerStart) continue;
+      const additionalSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - session.lastTimerStart.getTime()) / 1000),
+      );
+      if (session.totalElapsedSeconds + additionalSeconds < MAX_SESSION_SECONDS) continue;
+
+      const result = await prisma.session.updateMany({
+        where: {
+          id: session.id,
+          status: session.status,
+          lastTimerStart: session.lastTimerStart,
+        },
+        data: {
+          status: SessionStatus.PAUSED,
+          totalElapsedSeconds: MAX_SESSION_SECONDS,
+          lastTimerStart: null,
+          lastActionBy: null,
+        },
+      });
+      if (result.count === 0) continue;
+
+      const updated = {
+        ...session,
+        status: SessionStatus.PAUSED,
+        totalElapsedSeconds: MAX_SESSION_SECONDS,
+        lastTimerStart: null,
+        lastActionBy: null,
+      };
+      const [mappedSender, mappedReceiver] = await Promise.all([
+        mapSession(updated, updated.senderId),
+        mapSession(updated, updated.receiverId),
+      ]);
+      broadcastSessionUpdate(updated, mappedSender, mappedReceiver);
+      const message = 'Your meeting was automatically paused after reaching the 12-hour limit.';
+      await Promise.all([
+        NotificationService.createNotification(updated.senderId, 'session_auto_paused', message),
+        NotificationService.createNotification(updated.receiverId, 'session_auto_paused', message),
+      ]);
+      pausedCount += 1;
+    }
+    return pausedCount;
+  }
+
+  private static async endedParticipantSession(userId: number, requestId: number) {
+    const session = await prisma.session.findUnique({ where: { requestId } });
+    if (!session) throw new AppError('Session not found', 404);
+    if (session.senderId !== userId && session.receiverId !== userId) {
+      throw new AppError('Unauthorized', 403);
+    }
+    if (session.status !== SessionStatus.ENDED) {
+      throw new AppError('The meet must end before this action', 400);
+    }
+    return session;
+  }
+
+  public static async submitFeedback(
+    userId: number,
+    requestId: number,
+    rating: number,
+  ): Promise<MappedSession> {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new AppError('Rating must be between 1 and 5', 400);
+    }
+    const session = await SessionService.endedParticipantSession(userId, requestId);
+    const sender = session.senderId === userId;
+    const updated = await prisma.session.update({
+      where: { requestId },
+      data: sender
+        ? { senderRating: rating, senderReview: null, senderRatedAt: new Date() }
+        : { receiverRating: rating, receiverReview: null, receiverRatedAt: new Date() },
+    });
+    return mapSession(updated, userId);
+  }
+
+  public static async completeMockPayment(
+    userId: number,
+    requestId: number,
+    paymentMode: 'cash' | 'upi' | 'qr',
+  ): Promise<MappedSession> {
+    const session = await SessionService.endedParticipantSession(userId, requestId);
+    if (session.senderId !== userId) {
+      throw new AppError('Only the request sender can complete payment', 403);
+    }
+    const receiverProfile = await prisma.profile.findUnique({
+      where: { userId: session.receiverId },
+      select: { defaultUpiId: true, upiIds: true },
+    });
+    const usesUpi = paymentMode === 'upi' || paymentMode === 'qr';
+    const paymentUpiId = usesUpi ? (receiverProfile?.defaultUpiId ?? null) : null;
+    if (usesUpi && (!paymentUpiId || !receiverProfile?.upiIds.includes(paymentUpiId))) {
+      throw new AppError('The supporter has not configured a default UPI ID', 400);
+    }
+    const updated = await prisma.session.update({
+      where: { requestId },
+      data: {
+        paymentCompletedBy: userId,
+        paymentMode,
+        paymentUpiId,
+        paymentCompletedAt: new Date(),
+      },
+    });
+    const [mappedSender, mappedReceiver] = await Promise.all([
+      mapSession(updated, updated.senderId),
+      mapSession(updated, updated.receiverId),
+    ]);
+    broadcastSessionUpdate(updated, mappedSender, mappedReceiver);
+    return mappedSender;
+  }
+
+  public static async startSession(
+    userId: number,
+    requestId: number,
+    _otp: string,
+  ): Promise<MappedSession> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
     });
@@ -180,8 +397,7 @@ export class SessionService {
       return mapSession(existingSession, userId);
     }
 
-    const confirmedExpiryAt =
-      request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS;
+    const confirmedExpiryAt = request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS;
     if (Date.now() >= confirmedExpiryAt) {
       await prisma.request.update({
         where: { id: requestId },
@@ -190,6 +406,7 @@ export class SessionService {
           otp: null,
         },
       });
+      await restoreReadyNow([request.senderId, request.receiverId]);
       throw new AppError('This request has expired', 400);
     }
 
@@ -215,6 +432,7 @@ export class SessionService {
     const mappedSender = await mapSession(session, session.senderId);
     const mappedReceiver = await mapSession(session, session.receiverId);
     broadcastSessionUpdate(session, mappedSender, mappedReceiver);
+    scheduleSessionAutoPause(session.lastTimerStart!, session.totalElapsedSeconds);
 
     return mapSession(session, userId);
   }
@@ -238,7 +456,7 @@ export class SessionService {
 
     const updated = await prisma.session.update({
       where: { requestId: session.requestId },
-      data: { 
+      data: {
         status: SessionStatus.PAUSE_REQUESTED,
         lastActionBy: userId,
       },
@@ -315,10 +533,13 @@ export class SessionService {
     if (session.status !== SessionStatus.PAUSED) {
       throw new AppError('Session is not paused', 400);
     }
+    if (session.totalElapsedSeconds >= MAX_SESSION_SECONDS) {
+      throw new AppError('This meeting has reached the 12-hour limit and cannot be resumed', 400);
+    }
 
     const updated = await prisma.session.update({
       where: { requestId },
-      data: { 
+      data: {
         status: SessionStatus.RESUME_REQUESTED,
         lastActionBy: userId,
       },
@@ -364,6 +585,7 @@ export class SessionService {
     const mappedSender = await mapSession(updated, updated.senderId);
     const mappedReceiver = await mapSession(updated, updated.receiverId);
     broadcastSessionUpdate(updated, mappedSender, mappedReceiver);
+    scheduleSessionAutoPause(updated.lastTimerStart!, updated.totalElapsedSeconds);
 
     return mapSession(updated, userId);
   }
@@ -428,15 +650,16 @@ export class SessionService {
     session: any,
     endReason?: string | null,
   ): Promise<MappedSession> {
-
     const now = new Date();
     let additionalSeconds = 0;
-    const isRunning = ([
-      SessionStatus.RUNNING,
-      SessionStatus.PAUSE_REQUESTED,
-      SessionStatus.RESUME_REQUESTED,
-      SessionStatus.END_REQUESTED,
-    ] as SessionStatus[]).includes(session.status);
+    const isRunning = (
+      [
+        SessionStatus.RUNNING,
+        SessionStatus.PAUSE_REQUESTED,
+        SessionStatus.RESUME_REQUESTED,
+        SessionStatus.END_REQUESTED,
+      ] as SessionStatus[]
+    ).includes(session.status);
 
     if (isRunning && session.lastTimerStart) {
       additionalSeconds = Math.floor((now.getTime() - session.lastTimerStart.getTime()) / 1000);
@@ -456,6 +679,8 @@ export class SessionService {
         endReason: endReason?.trim() || session.endReason || null,
       },
     });
+
+    await restoreReadyNow([updated.senderId, updated.receiverId]);
 
     // Also update request status to cancel or expire if finished
     // But since session has finished, we can just keep request status as confirmed, or keep request state.

@@ -3,6 +3,7 @@ import {
   ListObjectsV2Command,
   S3Client,
   PutObjectCommand,
+  DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import path from 'path';
 import fs from 'fs';
@@ -53,14 +54,21 @@ export class UploadService {
         MaxKeys: 100,
       }),
     );
-    const keys = (response.Contents ?? [])
-      .map((item) => item.Key)
-      .filter((key): key is string => Boolean(key) && UploadService.isImageKey(key!))
-      .sort((a, b) => a.localeCompare(b));
+    const avatars = (response.Contents ?? [])
+      .filter(
+        (item): item is typeof item & { Key: string } =>
+          Boolean(item.Key) && UploadService.isImageKey(item.Key!),
+      )
+      .sort((a, b) => a.Key.localeCompare(b.Key));
 
-    return keys.map((key) => {
+    return avatars.map((item) => {
+      const key = item.Key;
       const path = `/api/upload/media/${encodeURIComponent(key)}`;
-      return reqHost && reqProtocol ? `${reqProtocol}://${reqHost}${path}` : path;
+      const version = item.ETag?.replaceAll('"', '') ?? item.LastModified?.getTime().toString();
+      const versionedPath = version ? `${path}?v=${encodeURIComponent(version)}` : path;
+      return reqHost && reqProtocol
+        ? `${reqProtocol}://${reqHost}${versionedPath}`
+        : versionedPath;
     });
   }
 
@@ -74,6 +82,10 @@ export class UploadService {
     reqHost?: string,
     reqProtocol?: string,
   ): Promise<string> {
+    if (!file.buffer?.length) {
+      throw new AppError('The uploaded file is empty', 400);
+    }
+
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const fileExtension = path.extname(file.originalname) || '.jpg';
     const fileName = `${folder}/${uniqueSuffix}${fileExtension}`;
@@ -118,7 +130,14 @@ export class UploadService {
         logger.error(
           `S3 upload failed completely: ${error.message}. Falling back to local storage.`,
         );
+        if (process.env.NODE_ENV === 'production' && file.mimetype.startsWith('audio/')) {
+          throw new AppError('Voice message storage is temporarily unavailable', 503);
+        }
       }
+    }
+
+    if (process.env.NODE_ENV === 'production' && file.mimetype.startsWith('audio/')) {
+      throw new AppError('Voice message storage is not configured', 503);
     }
 
     // 2. Local Fallback Storage
@@ -177,6 +196,31 @@ export class UploadService {
       stream: fs.createReadStream(localFilePath),
       contentType: UploadService.contentTypeForKey(key),
     };
+  }
+
+  public static async deleteUploadedFile(mediaUrl: string): Promise<void> {
+    const parsed = new URL(mediaUrl, 'http://localhost');
+    const mediaPrefix = '/api/upload/media/';
+    if (parsed.pathname.startsWith(mediaPrefix)) {
+      const key = UploadService.normalizeUploadedKey(parsed.pathname.slice(mediaPrefix.length));
+      if (!s3Client || !process.env.AWS_S3_BUCKET) {
+        throw new AppError('Voice message storage is unavailable', 503);
+      }
+      await s3Client.send(
+        new DeleteObjectCommand({ Bucket: process.env.AWS_S3_BUCKET, Key: key }),
+      );
+      return;
+    }
+
+    const localPrefix = '/uploads/';
+    if (parsed.pathname.startsWith(localPrefix)) {
+      const localFilePath = path.join(
+        __dirname,
+        '../../public/uploads',
+        path.basename(parsed.pathname),
+      );
+      if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
+    }
   }
 
   private static normalizeUploadedKey(rawKey: string): string {
