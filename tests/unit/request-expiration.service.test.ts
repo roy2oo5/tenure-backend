@@ -1,6 +1,10 @@
 import { RequestStatus } from '@prisma/client';
 import { prisma } from '@/config/database';
-import { expireReadyNowRequests } from '@/services/request-expiration.service';
+import {
+  confirmedOtpExpiresAt,
+  expireConfirmedRequestsPastOtpDeadline,
+  expireReadyNowRequests,
+} from '@/services/request-expiration.service';
 import { sendGlobalToUser } from '@/services/websocket.service';
 
 vi.mock('@/config/database', () => ({
@@ -17,7 +21,9 @@ vi.mock('@/services/websocket.service', () => ({
 }));
 
 describe('Ready Now request expiration', () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('expires unanswered requests and refreshes both participants', async () => {
     const deadline = new Date('2027-06-20T08:05:00.000Z');
@@ -40,6 +46,94 @@ describe('Ready Now request expiration', () => {
     expect(prisma.request.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: { status: RequestStatus.EXPIRED, otp: null },
+      }),
+    );
+    expect(sendGlobalToUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('automatically cancels an unanswered Quick Pick at its response deadline', async () => {
+    const deadline = new Date('2027-06-20T08:05:00.000Z');
+    (prisma.request.findMany as any).mockResolvedValue([
+      {
+        id: 102,
+        senderId: 1,
+        receiverId: 2,
+        responseDeadlineAt: deadline,
+        quickPickGroupId: 'group-id',
+      },
+    ]);
+    (prisma.request.updateMany as any).mockResolvedValue({ count: 1 });
+
+    const count = await expireReadyNowRequests(deadline);
+
+    expect(count).toBe(1);
+    expect(prisma.request.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: RequestStatus.PENDING }),
+        data: {
+          status: RequestStatus.CANCELLED,
+          cancelledAt: deadline,
+          cancellationFeeReason: 'Response time elapsed',
+          otp: null,
+        },
+      }),
+    );
+  });
+});
+
+describe('confirmed request OTP expiration', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('calculates midnight after the scheduled date in the request timezone', () => {
+    const scheduledAt = new Date('2027-06-20T10:00:00.000Z');
+
+    expect(confirmedOtpExpiresAt(scheduledAt, 330)).toEqual(new Date('2027-06-20T18:30:00.000Z'));
+  });
+
+  it('keeps a confirmed request active until the scheduled local date ends', async () => {
+    (prisma.request.findMany as any).mockResolvedValue([
+      {
+        id: 201,
+        senderId: 1,
+        receiverId: 2,
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        timezoneOffsetMinutes: 330,
+      },
+    ]);
+
+    const count = await expireConfirmedRequestsPastOtpDeadline(
+      new Date('2027-06-20T18:29:59.999Z'),
+    );
+
+    expect(count).toBe(0);
+    expect(prisma.request.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('expires a confirmed request after the scheduled local date ends', async () => {
+    (prisma.request.findMany as any).mockResolvedValue([
+      {
+        id: 202,
+        senderId: 1,
+        receiverId: 2,
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        timezoneOffsetMinutes: 330,
+      },
+    ]);
+    (prisma.request.updateMany as any).mockResolvedValue({ count: 1 });
+
+    const count = await expireConfirmedRequestsPastOtpDeadline(
+      new Date('2027-06-20T18:30:00.000Z'),
+    );
+
+    expect(count).toBe(1);
+    expect(prisma.request.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: RequestStatus.EXPIRED,
+          otp: null,
+        }),
       }),
     );
     expect(sendGlobalToUser).toHaveBeenCalledTimes(2);

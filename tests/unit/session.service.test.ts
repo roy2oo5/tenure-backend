@@ -52,6 +52,7 @@ describe('SessionService', () => {
     status: RequestStatus.CONFIRMED,
     otp: '1234',
     fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+    timezoneOffsetMinutes: 330,
     senderCurrentLatitude: 13.3409,
     senderCurrentLongitude: 74.7421,
     senderLocationUpdatedAt: new Date(),
@@ -111,17 +112,82 @@ describe('SessionService', () => {
     });
 
     it('should throw an error if OTP is invalid', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:30:00.000Z'));
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.session.findUnique as any).mockResolvedValue(null);
 
-      await expect(SessionService.startSession(1, 101, 'invalid-otp')).rejects.toThrow(
+      await expect(SessionService.startSession(2, 101, 'invalid-otp')).rejects.toThrow(
         'Invalid verification OTP code',
       );
     });
 
-    it('should expire confirmed OTP requests 12 hours after meet time if no session started', async () => {
+    it('allows OTP verification before the scheduled time on the scheduled date', async () => {
       vi.useFakeTimers();
-      vi.setSystemTime(new Date('2027-06-20T22:00:00.000Z'));
+      vi.setSystemTime(new Date('2027-06-20T01:00:00.000Z'));
+
+      const created = {
+        id: 202,
+        requestId: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: SessionStatus.RUNNING,
+        startedAt: new Date(),
+        lastTimerStart: new Date(),
+        totalElapsedSeconds: 0,
+        lastActionBy: null,
+      };
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.session.findUnique as any).mockResolvedValue(null);
+      (prisma.session.create as any).mockResolvedValue(created);
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
+
+      await expect(SessionService.startSession(2, 101, '1234')).resolves.toMatchObject({
+        status: 'running',
+      });
+    });
+
+    it('allows OTP verification after the scheduled time on the scheduled date', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T18:00:00.000Z'));
+
+      const created = {
+        id: 202,
+        requestId: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: SessionStatus.RUNNING,
+        startedAt: new Date(),
+        lastTimerStart: new Date(),
+        totalElapsedSeconds: 0,
+        lastActionBy: null,
+      };
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.session.findUnique as any).mockResolvedValue(null);
+      (prisma.session.create as any).mockResolvedValue(created);
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
+
+      await expect(SessionService.startSession(2, 101, '1234')).resolves.toMatchObject({
+        status: 'running',
+      });
+    });
+
+    it('rejects OTP verification before the scheduled date without cancelling the request', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-19T18:00:00.000Z'));
+      (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
+      (prisma.session.findUnique as any).mockResolvedValue(null);
+
+      await expect(SessionService.startSession(2, 101, '1234')).rejects.toThrow(
+        'OTP verification is allowed only on the scheduled support date.',
+      );
+      expect(prisma.request.update).not.toHaveBeenCalled();
+      expect(prisma.session.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects OTP verification outside the scheduled support date', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T19:00:00.000Z'));
 
       (prisma.request.findUnique as any).mockResolvedValue({
         ...mockRequest,
@@ -129,8 +195,8 @@ describe('SessionService', () => {
       });
       (prisma.session.findUnique as any).mockResolvedValue(null);
 
-      await expect(SessionService.startSession(1, 101, '1234')).rejects.toThrow(
-        'This request has expired',
+      await expect(SessionService.startSession(2, 101, '1234')).rejects.toThrow(
+        'OTP verification is allowed only on the scheduled support date.',
       );
 
       expect(prisma.request.update).toHaveBeenCalledWith({
@@ -138,6 +204,7 @@ describe('SessionService', () => {
         data: {
           status: RequestStatus.EXPIRED,
           otp: null,
+          cancellationFeeReason: 'OTP was not entered on the scheduled support date.',
         },
       });
       expect(prisma.session.create).not.toHaveBeenCalled();
@@ -161,12 +228,14 @@ describe('SessionService', () => {
       (prisma.session.findUnique as any).mockResolvedValue(existing);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession(1, 101, '1234');
+      const result = await SessionService.startSession(2, 101, '1234');
       expect(result.id).toBe(201);
       expect(result.status).toBe('running');
     });
 
     it('should create and broadcast new session if none exists', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:30:00.000Z'));
       const now = new Date();
       const created = {
         id: 202,
@@ -185,7 +254,7 @@ describe('SessionService', () => {
       (prisma.session.create as any).mockResolvedValue(created);
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
 
-      const result = await SessionService.startSession(1, 101, '1234');
+      const result = await SessionService.startSession(2, 101, '1234');
       expect(prisma.session.create).toHaveBeenCalled();
       expect(sendToUser).toHaveBeenCalledTimes(2); // broadcast to sender and receiver
       expect(result.status).toBe('running');
@@ -224,7 +293,9 @@ describe('SessionService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             status: SessionStatus.PAUSED,
-            totalElapsedSeconds: 43_200,
+            // Preserve all active seconds, including the second that crossed
+            // the continuous 12-hour pause threshold.
+            totalElapsedSeconds: 43_201,
             lastTimerStart: null,
           }),
         }),
@@ -406,6 +477,32 @@ describe('SessionService', () => {
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(3600);
       expect(result.billingAmount).toBeCloseTo(50.0, 1);
+    });
+
+    it('adds the selected extra-support amount to billing at the fixed request rate', async () => {
+      (prisma.session.findUnique as any).mockResolvedValue(activeSession);
+      (prisma.session.update as any).mockImplementation(({ data }: any) =>
+        Promise.resolve({
+          ...activeSession,
+          status: data.status,
+          totalElapsedSeconds: 3600,
+          lastTimerStart: data.lastTimerStart,
+          endedAt: data.endedAt,
+          lastActionBy: data.lastActionBy,
+        }),
+      );
+      (prisma.request.findUnique as any).mockResolvedValue({
+        ...mockRequest,
+        categoryLabel: 'Companionship',
+        quotedHourlyRate: 80,
+        readyToPayTip: true,
+        extraSupportAmount: 25,
+      });
+      (prisma.user.findUnique as any).mockResolvedValue(mockReceiverUser);
+
+      const result = await SessionService.endSession(2, 101);
+
+      expect(result.billingAmount).toBe(105);
     });
   });
 });

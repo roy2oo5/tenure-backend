@@ -42,6 +42,14 @@ export class DiscoverController {
         req.query.customHourlyRateMin != null ? Number(req.query.customHourlyRateMin) : undefined,
       customHourlyRateMax:
         req.query.customHourlyRateMax != null ? Number(req.query.customHourlyRateMax) : undefined,
+      requiredVehicleTypes: DiscoverController.parseLanguages(req.query.requiredVehicleTypes).filter(
+        (type): type is 'two_wheeler' | 'four_wheeler' =>
+          type === 'two_wheeler' || type === 'four_wheeler',
+      ),
+      drivingVehicleType:
+        req.query.drivingVehicleType === 'two_wheeler' || req.query.drivingVehicleType === 'four_wheeler'
+          ? (req.query.drivingVehicleType as 'two_wheeler' | 'four_wheeler')
+          : undefined,
     };
   }
 

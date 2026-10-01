@@ -30,6 +30,7 @@ const envSchema = z.object({
   TURN_HOST: z.string().optional(),
   TURN_SHARED_SECRET: z.string().min(32).optional(),
   TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
+  GOOGLE_ROUTES_API_KEY: z.string().min(1).optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

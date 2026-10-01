@@ -1,63 +1,59 @@
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 import { CallController } from '@/controllers/call.controller';
+import { CallService } from '@/services/call.service';
+
+vi.mock('@/services/call.service', () => ({
+  CallService: {
+    getDailyPairUsage: vi.fn(),
+    getCallHistory: vi.fn(),
+  },
+}));
+
+function response() {
+  return {
+    status: vi.fn().mockReturnThis(),
+    json: vi.fn().mockReturnThis(),
+  } as unknown as Response;
+}
 
 describe('CallController', () => {
-  describe('twilioVoiceWebhook', () => {
-    it('should return 200 with text/xml content type and valid TwiML client dial when To is present', () => {
-      const req = {
-        body: { To: 'user_bob' },
-        query: {},
-      } as unknown as Request;
-      const res = {
-        type: vi.fn().mockReturnThis(),
-        status: vi.fn().mockReturnThis(),
-        send: vi.fn().mockReturnThis(),
-      } as unknown as Response;
-
-      CallController.twilioVoiceWebhook(req, res);
-
-      expect(res.type).toHaveBeenCalledWith('text/xml');
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.send).toHaveBeenCalledWith(expect.stringContaining('<Response>'));
-      expect(res.send).toHaveBeenCalledWith(expect.stringContaining('<Dial>'));
-      expect(res.send).toHaveBeenCalledWith(expect.stringContaining('<Client>user_bob</Client>'));
-    });
-
-    it('should return 200 with text/xml when To is not present', () => {
-      const req = {
-        body: {},
-        query: {},
-      } as unknown as Request;
-      const res = {
-        type: vi.fn().mockReturnThis(),
-        status: vi.fn().mockReturnThis(),
-        send: vi.fn().mockReturnThis(),
-      } as unknown as Response;
-
-      CallController.twilioVoiceWebhook(req, res);
-
-      expect(res.type).toHaveBeenCalledWith('text/xml');
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.send).toHaveBeenCalledWith(expect.stringContaining('<Response>'));
-      expect(res.send).toHaveBeenCalledWith(expect.stringContaining('<Say voice="alice">'));
-    });
+  afterEach(() => {
+    vi.clearAllMocks();
   });
 
-  describe('getTwilioToken', () => {
-    it('should return 500 if Twilio env variables are missing', () => {
-      const req = {
-        query: {},
-      } as unknown as Request;
-      const res = {} as Response;
-      const next = vi.fn();
+  it('rejects unauthenticated TURN credential requests', () => {
+    const next = vi.fn() as unknown as NextFunction;
+    CallController.getTurnCredentials({} as Request, response(), next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+  });
 
-      CallController.getTwilioToken(req, res, next);
+  it('returns daily call usage for the authenticated user pair', async () => {
+    const usage = { usedSeconds: 120, remainingSeconds: 480 };
+    vi.mocked(CallService.getDailyPairUsage).mockResolvedValue(usage as never);
+    const req = { user: { id: 7 }, params: { mateUserId: '9' } } as unknown as Request;
+    const res = response();
+    const next = vi.fn() as unknown as NextFunction;
 
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          statusCode: 500,
-        })
-      );
-    });
+    await CallController.getLimit(req, res, next);
+
+    expect(CallService.getDailyPairUsage).toHaveBeenCalledWith(7, 9);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: 'success', data: usage });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns call history for the authenticated user', async () => {
+    const calls = [{ id: 1, durationSeconds: 30 }];
+    vi.mocked(CallService.getCallHistory).mockResolvedValue(calls as never);
+    const req = { user: { id: 7 } } as unknown as Request;
+    const res = response();
+    const next = vi.fn() as unknown as NextFunction;
+
+    await CallController.getHistory(req, res, next);
+
+    expect(CallService.getCallHistory).toHaveBeenCalledWith(7);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: 'success', data: { calls } });
+    expect(next).not.toHaveBeenCalled();
   });
 });

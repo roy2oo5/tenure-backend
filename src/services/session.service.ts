@@ -5,13 +5,30 @@ import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
 import { sendToUser, sendGlobalToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
-import { CONFIRMED_REQUEST_EXPIRY_WINDOW_MS } from './request.service';
 import { restoreReadyNow } from './ready-now.service';
 
-const MAX_SESSION_SECONDS = 12 * 60 * 60;
+// The 12-hour limit applies to one uninterrupted running period. A resumed
+// session keeps its accumulated billable time and receives a new 12-hour run.
+const MAX_CONTINUOUS_SESSION_SECONDS = 12 * 60 * 60;
 const AUTO_PAUSE_RETRY_MS = 60_000;
 let autoPauseTimer: NodeJS.Timeout | null = null;
 let scheduledAutoPauseAt: number | null = null;
+
+function isSameLocalCalendarDay(first: Date, second: Date, timezoneOffsetMinutes = 0): boolean {
+  const offsetMs = timezoneOffsetMinutes * 60 * 1000;
+  const firstLocal = new Date(first.getTime() + offsetMs);
+  const secondLocal = new Date(second.getTime() + offsetMs);
+  return (
+    firstLocal.getUTCFullYear() === secondLocal.getUTCFullYear() &&
+    firstLocal.getUTCMonth() === secondLocal.getUTCMonth() &&
+    firstLocal.getUTCDate() === secondLocal.getUTCDate()
+  );
+}
+
+function localCalendarDayValue(date: Date, timezoneOffsetMinutes = 0): number {
+  const local = new Date(date.getTime() + timezoneOffsetMinutes * 60 * 1000);
+  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+}
 
 export type MappedSession = {
   id: number;
@@ -99,7 +116,11 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
     ? partner?.profile
     : await prisma.profile.findFirst({ where: { userId: session.receiverId } });
 
-  const hourlyRate = hourlyRateForRequest(mateProfile, request?.categoryLabel);
+  const quotedHourlyRate = Number(request?.quotedHourlyRate);
+  const hourlyRate =
+    Number.isFinite(quotedHourlyRate) && quotedHourlyRate > 0
+      ? quotedHourlyRate
+      : hourlyRateForRequest(mateProfile, request?.categoryLabel);
 
   // Calculate dynamic elapsed time if running
   let elapsedSec = session.totalElapsedSeconds;
@@ -113,9 +134,13 @@ async function mapSession(session: any, currentUserId: number): Promise<MappedSe
     const deltaMs = Date.now() - session.lastTimerStart.getTime();
     elapsedSec += Math.floor(deltaMs / 1000);
   }
-  elapsedSec = Math.min(elapsedSec, MAX_SESSION_SECONDS);
 
-  const billingAmount = parseFloat(((elapsedSec / 3600) * hourlyRate).toFixed(2));
+  const supportAmount = (elapsedSec / 3600) * hourlyRate;
+  const extraSupportAmount =
+    request?.readyToPayTip && request.extraSupportAmount != null
+      ? Number(request.extraSupportAmount)
+      : 0;
+  const billingAmount = parseFloat((supportAmount + extraSupportAmount).toFixed(2));
 
   let statusMapped: MappedSession['status'] = 'running';
   switch (session.status) {
@@ -220,8 +245,9 @@ async function runSessionAutoPauseAndScheduleNext(): Promise<void> {
     });
     const nextDeadline = activeSessions.reduce<Date | null>((earliest, session) => {
       if (!session.lastTimerStart) return earliest;
-      const remainingSeconds = Math.max(0, MAX_SESSION_SECONDS - session.totalElapsedSeconds);
-      const deadline = new Date(session.lastTimerStart.getTime() + remainingSeconds * 1000);
+      const deadline = new Date(
+        session.lastTimerStart.getTime() + MAX_CONTINUOUS_SESSION_SECONDS * 1000,
+      );
       return !earliest || deadline < earliest ? deadline : earliest;
     }, null);
     if (nextDeadline) armSessionAutoPause(nextDeadline);
@@ -231,9 +257,8 @@ async function runSessionAutoPauseAndScheduleNext(): Promise<void> {
   }
 }
 
-export function scheduleSessionAutoPause(lastTimerStart: Date, totalElapsedSeconds = 0): void {
-  const remainingSeconds = Math.max(0, MAX_SESSION_SECONDS - totalElapsedSeconds);
-  armSessionAutoPause(new Date(lastTimerStart.getTime() + remainingSeconds * 1000));
+export function scheduleSessionAutoPause(lastTimerStart: Date, _totalElapsedSeconds = 0): void {
+  armSessionAutoPause(new Date(lastTimerStart.getTime() + MAX_CONTINUOUS_SESSION_SECONDS * 1000));
 }
 
 export function startSessionAutoPauseScheduler(): void {
@@ -263,7 +288,7 @@ export class SessionService {
         0,
         Math.floor((now.getTime() - session.lastTimerStart.getTime()) / 1000),
       );
-      if (session.totalElapsedSeconds + additionalSeconds < MAX_SESSION_SECONDS) continue;
+      if (additionalSeconds < MAX_CONTINUOUS_SESSION_SECONDS) continue;
 
       const result = await prisma.session.updateMany({
         where: {
@@ -273,7 +298,7 @@ export class SessionService {
         },
         data: {
           status: SessionStatus.PAUSED,
-          totalElapsedSeconds: MAX_SESSION_SECONDS,
+          totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
           lastTimerStart: null,
           lastActionBy: null,
         },
@@ -283,7 +308,7 @@ export class SessionService {
       const updated = {
         ...session,
         status: SessionStatus.PAUSED,
-        totalElapsedSeconds: MAX_SESSION_SECONDS,
+        totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
         lastTimerStart: null,
         lastActionBy: null,
       };
@@ -323,12 +348,12 @@ export class SessionService {
       throw new AppError('Rating must be between 1 and 5', 400);
     }
     const session = await SessionService.endedParticipantSession(userId, requestId);
-    const sender = session.senderId === userId;
+    if (session.senderId !== userId) {
+      throw new AppError('Only the beneficiary can submit a review', 403);
+    }
     const updated = await prisma.session.update({
       where: { requestId },
-      data: sender
-        ? { senderRating: rating, senderReview: null, senderRatedAt: new Date() }
-        : { receiverRating: rating, receiverReview: null, receiverRatedAt: new Date() },
+      data: { senderRating: rating, senderReview: null, senderRatedAt: new Date() },
     });
     return mapSession(updated, userId);
   }
@@ -388,6 +413,9 @@ export class SessionService {
     if (request.senderId !== userId && request.receiverId !== userId) {
       throw new AppError('You are not authorized to start a session for this request', 403);
     }
+    if (request.receiverId !== userId) {
+      throw new AppError('Only the supporter can verify the OTP and start this session', 403);
+    }
 
     const existingSession = await prisma.session.findUnique({
       where: { requestId },
@@ -397,17 +425,31 @@ export class SessionService {
       return mapSession(existingSession, userId);
     }
 
-    const confirmedExpiryAt = request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS;
-    if (Date.now() >= confirmedExpiryAt) {
+    const now = new Date();
+    const timezoneOffsetMinutes = request.timezoneOffsetMinutes ?? 0;
+    const isScheduledDate = isSameLocalCalendarDay(
+      now,
+      request.fromDateTime,
+      timezoneOffsetMinutes,
+    );
+    if (!isScheduledDate) {
+      const isBeforeScheduledDate =
+        localCalendarDayValue(now, timezoneOffsetMinutes) <
+        localCalendarDayValue(request.fromDateTime, timezoneOffsetMinutes);
+      if (isBeforeScheduledDate) {
+        throw new AppError('OTP verification is allowed only on the scheduled support date.', 400);
+      }
+
       await prisma.request.update({
         where: { id: requestId },
         data: {
           status: RequestStatus.EXPIRED,
           otp: null,
+          cancellationFeeReason: 'OTP was not entered on the scheduled support date.',
         },
       });
       await restoreReadyNow([request.senderId, request.receiverId]);
-      throw new AppError('This request has expired', 400);
+      throw new AppError('OTP verification is allowed only on the scheduled support date.', 400);
     }
 
     const proximity = otpProximityForRequest(request);
@@ -501,10 +543,7 @@ export class SessionService {
       where: { requestId },
       data: {
         status: SessionStatus.PAUSED,
-        totalElapsedSeconds: Math.min(
-          session.totalElapsedSeconds + additionalSeconds,
-          MAX_SESSION_SECONDS,
-        ),
+        totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
         lastTimerStart: null,
         lastActionBy: null,
       },
@@ -532,9 +571,6 @@ export class SessionService {
 
     if (session.status !== SessionStatus.PAUSED) {
       throw new AppError('Session is not paused', 400);
-    }
-    if (session.totalElapsedSeconds >= MAX_SESSION_SECONDS) {
-      throw new AppError('This meeting has reached the 12-hour limit and cannot be resumed', 400);
     }
 
     const updated = await prisma.session.update({
@@ -669,10 +705,7 @@ export class SessionService {
       where: { requestId: session.requestId },
       data: {
         status: SessionStatus.ENDED,
-        totalElapsedSeconds: Math.min(
-          session.totalElapsedSeconds + additionalSeconds,
-          MAX_SESSION_SECONDS,
-        ),
+        totalElapsedSeconds: session.totalElapsedSeconds + additionalSeconds,
         lastTimerStart: null,
         endedAt: now,
         lastActionBy: null,

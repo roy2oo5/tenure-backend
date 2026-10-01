@@ -67,8 +67,15 @@ export const createRequestSchema = z.object({
         .nullable(),
       readyToPayTravelCharges: z.boolean().optional().default(false),
       readyToPayTip: z.boolean().optional().default(false),
+      extraSupportAmount: z.number().positive().max(100000).optional().nullable(),
       needsMateVehicle: z.boolean().optional().default(false),
       offersRequesterVehicle: z.boolean().optional().default(false),
+      neededMateVehicleTypes: z
+        .array(z.enum(['two_wheeler', 'four_wheeler']))
+        .max(2)
+        .optional()
+        .default([]),
+      offeredRequesterVehicleType: z.enum(['two_wheeler', 'four_wheeler']).optional().nullable(),
     })
     .superRefine((body, ctx) => {
       if (body.toDateTime && body.toDateTime <= body.fromDateTime) {
@@ -120,6 +127,38 @@ export const createRequestSchema = z.object({
         });
       }
     }),
+});
+
+export const createQuickPickSchema = z.object({
+  body: z.object({
+    bookingFor: z.enum(['self', 'someone_else']).default('self'),
+    beneficiaryName: z.string().trim().optional().nullable(),
+    beneficiaryPhone: z.string().trim().max(30).optional().nullable(),
+    beneficiaryRelation: z.string().trim().max(100).optional().nullable(),
+    beneficiaryNote: z.string().trim().max(240).optional().nullable(),
+    message: z.string().trim().max(240).optional().nullable(),
+    readyToPayTravelCharges: z.boolean().optional().default(false),
+    readyToPayTip: z.boolean().optional().default(false),
+    extraSupportAmount: z.number().positive().max(100000).optional().nullable(),
+    neededMateVehicleTypes: z.array(z.enum(['two_wheeler', 'four_wheeler'])).max(2).optional().default([]),
+    offeredRequesterVehicleType: z.enum(['two_wheeler', 'four_wheeler']).optional().nullable(),
+    category: z.string().trim().min(1).max(100),
+    meetLocation: z.string().trim().min(1).max(300),
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    hourlyRate: z.number().positive().max(100000),
+    durationMinutes: z
+      .number()
+      .int()
+      .min(30)
+      .max(720)
+      .refine((value) => value % 30 === 0),
+    responseTime: z
+      .number()
+      .int()
+      .refine((value) => [5, 8, 10, 12, 15, 20].includes(value)),
+    timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  }),
 });
 
 export const updateRequestStatusSchema = z.object({

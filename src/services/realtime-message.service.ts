@@ -17,6 +17,7 @@ export interface SendMessageInput {
   text?: string;
   mediaUrl?: string;
   voiceDurationSec?: number;
+  viewOnce?: boolean;
   createdAt: number;
 }
 
@@ -31,6 +32,12 @@ export interface DeleteMessageInput {
   chatRoomId: string;
 }
 
+export interface OpenViewOnceInput {
+  event: 'open_view_once';
+  messageId: string;
+  chatRoomId: string;
+}
+
 export interface RoutedMessage {
   id: string;
   sender: 'me' | 'them';
@@ -39,6 +46,8 @@ export interface RoutedMessage {
   imageUri?: string;
   voiceUri?: string;
   voiceDurationSec?: number;
+  viewOnce?: boolean;
+  expiresAt?: number;
   createdAt: number;
   isDeleted: boolean;
 }
@@ -86,6 +95,9 @@ export class RealtimeMessageService {
     if (!Number.isInteger(recipientId)) throw new AppError('Invalid recipient', 400);
     const text = input.text?.trim() ?? '';
     if (input.type === 'text' && !text) throw new AppError('Message text is required', 400);
+    if (input.viewOnce && input.type !== 'image') throw new AppError('Only images can be view-once media', 400);
+    if (input.viewOnce && !input.mediaUrl) throw new AppError('View-once image is required', 400);
+    const expiresAt = input.viewOnce ? new Date(Date.now() + 60 * 60 * 1000) : undefined;
 
     const message = await prisma.message.upsert({
       where: { clientMessageId: input.messageId },
@@ -98,6 +110,8 @@ export class RealtimeMessageService {
         type: input.type,
         mediaUrl: input.mediaUrl ?? null,
         voiceDuration: input.voiceDurationSec ?? null,
+        viewOnce: input.viewOnce === true,
+        ...(expiresAt ? { expiresAt } : {}),
       },
       update: {},
     });
@@ -114,6 +128,8 @@ export class RealtimeMessageService {
       imageUri: message.type === 'image' ? (message.mediaUrl ?? message.content) : undefined,
       voiceUri: message.type === 'voice' ? (message.mediaUrl ?? message.content) : undefined,
       voiceDurationSec: message.voiceDuration ?? undefined,
+      viewOnce: message.viewOnce,
+      expiresAt: message.expiresAt.getTime(),
       createdAt: message.createdAt.getTime(),
       isDeleted: message.isDeleted,
     };
@@ -155,17 +171,31 @@ export class RealtimeMessageService {
     const message = await prisma.message.findUnique({ where: { clientMessageId: input.messageId } });
     if (message?.type === 'voice' && message.mediaUrl) {
       await UploadService.deleteUploadedFile(message.mediaUrl);
+      await prisma.message.update({
+        where: { clientMessageId: input.messageId },
+        data: { mediaUrl: null },
+      });
     }
-    await prisma.message.update({
-      where: { clientMessageId: input.messageId },
-      data: {
-        content: message?.type === 'text' ? 'Delivered message' : message?.content,
-        mediaUrl: null,
-      },
-    });
     await prisma.undeliveredMessage.delete({ where: { messageId: input.messageId } });
     const senderSocket = activeUserConnections.get(recipientKey(queued.senderId, queued.chatRoomId));
     if (senderSocket) sendJson(senderSocket, { event: 'delivered_confirm', messageId: input.messageId });
+  }
+
+  public static async handleOpenViewOnce(recipientId: number, input: OpenViewOnceInput): Promise<void> {
+    const message = await prisma.message.findUnique({ where: { clientMessageId: input.messageId } });
+    if (!message || String(message.requestId) !== input.chatRoomId) throw new AppError('Photo not found', 404);
+    if (!message.viewOnce || message.type !== 'image') throw new AppError('This is not a view-once photo', 400);
+    if (message.receiverId !== recipientId) throw new AppError('Only the recipient can open this photo', 403);
+    if (message.openedAt || message.isDeleted || message.expiresAt <= new Date()) throw new AppError('This view-once photo has expired', 410);
+    const consumed = await prisma.message.updateMany({
+      where: { id: message.id, openedAt: null, isDeleted: false, expiresAt: { gt: new Date() } },
+      data: { openedAt: new Date(), content: 'View-once photo opened', mediaUrl: null, isDeleted: true, deletedAt: new Date() },
+    });
+    if (consumed.count !== 1) throw new AppError('This view-once photo has expired', 410);
+    if (message.mediaUrl) await UploadService.deleteUploadedFile(message.mediaUrl);
+    const control = { event: 'message_control_event', control: { event: 'view_once_opened', messageId: message.clientMessageId } };
+    const senderSocket = activeUserConnections.get(recipientKey(message.senderId, input.chatRoomId));
+    if (senderSocket) sendJson(senderSocket, control);
   }
 
   public static async handleDeleteForEveryone(

@@ -8,17 +8,16 @@ export const MATE_CATEGORIES: MateCategory[] = [
   { id: 'request', label: 'Support Based on Request' },
   { id: 'hospital', label: 'Hospital Support' },
   { id: 'shopping', label: 'Shopping Support' },
-  { id: 'tech-education', label: 'Tech & Education Support' },
+  { id: 'day', label: 'Day Activity Support' },
   { id: 'fitness', label: 'Gym, Yoga & Jogging Support' },
-  { id: 'home', label: 'Home Clean-up Support' },
+  { id: 'events', label: 'Pub, Party & Event Support' },
+  { id: 'emotional', label: 'Friendly & Emotional Support' },
+  { id: 'newcomer', label: 'Tourist Guide Support' },
+  { id: 'tech-education', label: 'Tech & Education Support' },
   { id: 'driving', label: 'Driving Support' },
   { id: 'sports', label: 'Sports Support' },
-  { id: 'events', label: 'Pub, Party & Event Support' },
-  { id: 'travel', label: 'Holiday & Travel Support' },
-  { id: 'day', label: 'Day Activity Support' },
-  { id: 'emotional', label: 'Friendly & Emotional Support' },
-  { id: 'newcomer', label: 'Newcomer & Consultant Support' },
-  { id: 'vlogging', label: 'Vlogging Support' },
+  { id: 'travel', label: 'Travel Support' },
+  { id: 'home', label: 'Clean-up Support' },
 ];
 
 /** Legacy / profile-editor labels mapped to canonical category ids. */
@@ -37,14 +36,18 @@ const CATEGORY_ALIASES: Record<string, string> = {
   'hospital mate': 'hospital',
   'hospital support': 'hospital',
   'home clean-up support': 'home',
+  'clean-up support': 'home',
   'driving support': 'driving',
   'sports support': 'sports',
   'pub/party/event support': 'events',
   'holiday/travel support': 'travel',
+  'holiday & travel support': 'travel',
+  'travel support': 'travel',
   'friendly/emotional support': 'emotional',
   'newcomer/orientation support': 'newcomer',
-  'vlog mate': 'vlogging',
-  'vlogging support': 'vlogging',
+  'newcomer & consultant support': 'newcomer',
+  'consultant support': 'newcomer',
+  'tourist guide support': 'newcomer',
   'city walk': 'day',
   events: 'events',
 };
@@ -97,6 +100,15 @@ export function getCategoryMatchVariants(filterValue: string): string[] {
   }
 
   return [...variants];
+}
+
+/**
+ * Returns the current display label for a known category while preserving
+ * unknown values. API responses use this so clients never need to understand
+ * legacy profile labels.
+ */
+export function canonicalCategoryLabel(value: string): string {
+  return findCategory(value)?.label ?? value.trim();
 }
 
 export function profileMatchesCategory(

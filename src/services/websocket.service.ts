@@ -14,6 +14,7 @@ import { otpProximityForRequest } from '../utils/otp-proximity';
 import {
   DeleteMessageInput,
   MessageAckInput,
+  OpenViewOnceInput,
   RealtimeMessageService,
   SendMessageInput,
 } from './realtime-message.service';
@@ -64,19 +65,21 @@ export function initWebSocket(server: HttpServer) {
 
   const maintenanceTimer = setInterval(() => {
     getAppStatus(true)
-      .then(status => {
+      .then((status) => {
         if (!status.maintenanceMode) return;
         for (const client of wss.clients) {
           if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              event: 'maintenance_mode',
-              message: status.maintenanceMessage,
-            }));
+            client.send(
+              JSON.stringify({
+                event: 'maintenance_mode',
+                message: status.maintenanceMessage,
+              }),
+            );
           }
           client.close(1013, 'Service under maintenance');
         }
       })
-      .catch(error => logger.error(`Maintenance WebSocket check failed: ${error}`));
+      .catch((error) => logger.error(`Maintenance WebSocket check failed: ${error}`));
   }, 5_000);
   maintenanceTimer.unref();
 
@@ -102,10 +105,12 @@ export function initWebSocket(server: HttpServer) {
     try {
       const appStatus = await getAppStatus();
       if (appStatus.maintenanceMode) {
-        ws.send(JSON.stringify({
-          event: 'maintenance_mode',
-          message: appStatus.maintenanceMessage,
-        }));
+        ws.send(
+          JSON.stringify({
+            event: 'maintenance_mode',
+            message: appStatus.maintenanceMessage,
+          }),
+        );
         ws.close(1013, 'Service under maintenance');
         return;
       }
@@ -189,14 +194,15 @@ export function initWebSocket(server: HttpServer) {
               return;
             }
 
-            if (typeof data.type === 'string' && (
-              data.type === 'incoming_call' ||
-              data.type === 'call_accepted' ||
-              data.type === 'call_rejected' ||
-              data.type === 'call_cancelled' ||
-              data.type === 'call_ended' ||
-              data.type === 'webrtc_signal'
-            )) {
+            if (
+              typeof data.type === 'string' &&
+              (data.type === 'incoming_call' ||
+                data.type === 'call_accepted' ||
+                data.type === 'call_rejected' ||
+                data.type === 'call_cancelled' ||
+                data.type === 'call_ended' ||
+                data.type === 'webrtc_signal')
+            ) {
               await handleGlobalCallMessage(ws, userId, data);
               return;
             }
@@ -252,7 +258,9 @@ export function initWebSocket(server: HttpServer) {
 
       // Chat is available only after both participants have confirmed the request.
       if (meetRequest.status !== RequestStatus.CONFIRMED) {
-        ws.send(JSON.stringify({ error: 'Chat is available after both users confirm the request' }));
+        ws.send(
+          JSON.stringify({ error: 'Chat is available after both users confirm the request' }),
+        );
         ws.close(4003, 'Request not confirmed');
         return;
       }
@@ -288,11 +296,16 @@ export function initWebSocket(server: HttpServer) {
           const { type = 'text', content, mediaUrl, voiceDuration } = data;
 
           if (data.event === 'send_message') {
-            const expectedRecipient = meetRequest.senderId === userId
-              ? meetRequest.receiverId
-              : meetRequest.senderId;
+            const expectedRecipient =
+              meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
             if (String(data.recipientId) !== String(expectedRecipient)) {
-              ws.send(JSON.stringify({ event: 'send_failed', messageId: data.messageId, error: 'Invalid recipient' }));
+              ws.send(
+                JSON.stringify({
+                  event: 'send_failed',
+                  messageId: data.messageId,
+                  error: 'Invalid recipient',
+                }),
+              );
               return;
             }
             try {
@@ -303,11 +316,13 @@ export function initWebSocket(server: HttpServer) {
                 data as SendMessageInput,
               );
             } catch (error: unknown) {
-              ws.send(JSON.stringify({
-                event: 'send_failed',
-                messageId: data.messageId,
-                error: error instanceof Error ? error.message : 'Message delivery failed',
-              }));
+              ws.send(
+                JSON.stringify({
+                  event: 'send_failed',
+                  messageId: data.messageId,
+                  error: error instanceof Error ? error.message : 'Message delivery failed',
+                }),
+              );
             }
             return;
           }
@@ -324,11 +339,30 @@ export function initWebSocket(server: HttpServer) {
           }
 
           if (data.event === 'delete_for_everyone') {
-            await RealtimeMessageService.handleDeleteForEveryone(userId, data as DeleteMessageInput);
-            ws.send(JSON.stringify({
-              event: 'message_control_event',
-              control: { event: 'delete_message', messageId: data.messageId },
-            }));
+            await RealtimeMessageService.handleDeleteForEveryone(
+              userId,
+              data as DeleteMessageInput,
+            );
+            ws.send(
+              JSON.stringify({
+                event: 'message_control_event',
+                control: { event: 'delete_message', messageId: data.messageId },
+              }),
+            );
+            return;
+          }
+
+          if (data.event === 'open_view_once') {
+            try {
+              await RealtimeMessageService.handleOpenViewOnce(userId, data as OpenViewOnceInput);
+              ws.send(JSON.stringify({ event: 'view_once_opened', messageId: data.messageId }));
+            } catch (error: unknown) {
+              ws.send(JSON.stringify({
+                event: 'view_once_open_failed',
+                messageId: data.messageId,
+                error: error instanceof Error ? error.message : 'Photo could not be opened',
+              }));
+            }
             return;
           }
 
@@ -365,7 +399,21 @@ export function initWebSocket(server: HttpServer) {
                     receiverLocationUpdatedAt: new Date(),
                   },
             });
-            const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
+            // Confirm persistence to the publishing device.  The client uses
+            // this acknowledgement to request route metrics only after the
+            // live coordinate is actually available to the route endpoint.
+            // Without it, the first metrics request races this database write
+            // and commonly displays "Route unavailable".
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  event: 'live_location_saved',
+                  requestId,
+                }),
+              );
+            }
+            const receiverId =
+              meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
             const recipientSockets = connections.get(receiverId);
             if (recipientSockets) {
               for (const recipientSocket of recipientSockets) {
@@ -415,16 +463,18 @@ export function initWebSocket(server: HttpServer) {
                 select: { otp: true },
               });
               if (otpRequest?.otp) {
-                sendToUserForRequest(meetRequest.receiverId, requestId, {
-                  event: 'otp_ready',
-                  requestId,
-                  otp: otpRequest.otp,
-                  message: 'You are within 20 m. Share this OTP with the requester.',
-                });
+                // The request sender is the beneficiary: only they receive
+                // the code. The receiver/supporter enters it to start.
                 sendToUserForRequest(meetRequest.senderId, requestId, {
                   event: 'otp_ready',
                   requestId,
-                  message: 'You are within 20 m. Ask the supporter for the OTP.',
+                  otp: otpRequest.otp,
+                  message: 'You are within 20 m. Share this OTP with the supporter.',
+                });
+                sendToUserForRequest(meetRequest.receiverId, requestId, {
+                  event: 'otp_ready',
+                  requestId,
+                  message: 'You are within 20 m. Ask the beneficiary for the OTP.',
                 });
               }
             }
@@ -437,7 +487,8 @@ export function initWebSocket(server: HttpServer) {
           }
 
           // Determine recipient
-          const receiverId = meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
+          const receiverId =
+            meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
 
           // Save to database
           const message = await prisma.message.create({
@@ -473,7 +524,9 @@ export function initWebSocket(server: HttpServer) {
                 recipientSocket.readyState === WebSocket.OPEN &&
                 chatRequestIds.get(recipientSocket) === requestId
               ) {
-                recipientSocket.send(JSON.stringify({ event: 'message', message: formattedMessage }));
+                recipientSocket.send(
+                  JSON.stringify({ event: 'message', message: formattedMessage }),
+                );
                 recipientIsActiveInChat = true;
               }
             }
@@ -493,10 +546,12 @@ export function initWebSocket(server: HttpServer) {
               if (muted) {
                 // Muted conversations still receive messages, but never alert
                 // the recipient while they are outside the chat.
-                ws.send(JSON.stringify({
-                  event: 'ack',
-                  message: { ...formattedMessage, sender: 'me' },
-                }));
+                ws.send(
+                  JSON.stringify({
+                    event: 'ack',
+                    message: { ...formattedMessage, sender: 'me' },
+                  }),
+                );
                 return;
               }
               const recipientUser = await prisma.user.findUnique({
@@ -530,14 +585,15 @@ export function initWebSocket(server: HttpServer) {
           }
 
           // Send confirmation back to sender
-          ws.send(JSON.stringify({
-            event: 'ack',
-            message: {
-              ...formattedMessage,
-              sender: 'me', // To the sender, they are "me"
-            }
-          }));
-
+          ws.send(
+            JSON.stringify({
+              event: 'ack',
+              message: {
+                ...formattedMessage,
+                sender: 'me', // To the sender, they are "me"
+              },
+            }),
+          );
         } catch (error: any) {
           logger.error(`WebSocket error processing message: ${error.message}`);
           ws.send(JSON.stringify({ error: 'Failed to process message' }));
@@ -555,7 +611,6 @@ export function initWebSocket(server: HttpServer) {
         }
         logger.info(`WebSocket client disconnected: user=${userId}`);
       });
-
     } catch (error: any) {
       logger.error(`WebSocket connection setup error: ${error.message}`);
       ws.close(4500, 'Internal Server Error');
@@ -675,7 +730,10 @@ async function handleTypedCallMessage(
     activeCallsByUser.set(userId, call.id);
     activeCallsByUser.set(data.targetId, call.id);
     const [profile, caller] = await Promise.all([
-      prisma.profile.findUnique({ where: { userId }, select: { fullName: true, profilePhoto: true } }),
+      prisma.profile.findUnique({
+        where: { userId },
+        select: { fullName: true, profilePhoto: true },
+      }),
       prisma.user.findUnique({ where: { id: userId }, select: { name: true } }),
     ]);
     const incoming = {
@@ -688,13 +746,15 @@ async function handleTypedCallMessage(
       ...usage,
     };
     const delivered = sendGlobalToUser(data.targetId, incoming);
-    ws.send(JSON.stringify({
-      event: 'call:initiated',
-      callId: call.id,
-      receiverId: data.targetId,
-      delivered,
-      ...usage,
-    }));
+    ws.send(
+      JSON.stringify({
+        event: 'call:initiated',
+        callId: call.id,
+        receiverId: data.targetId,
+        delivered,
+        ...usage,
+      }),
+    );
 
     if (!delivered && targetUser.fcmToken) {
       sendPushNotification(
@@ -721,7 +781,11 @@ async function handleTypedCallMessage(
         activeCallsByUser.delete(userId);
         activeCallsByUser.delete(data.targetId);
         sendGlobalToUser(userId, { event: 'call:end', callId: call.id, reason: 'no_answer' });
-        sendGlobalToUser(data.targetId, { event: 'call:end', callId: call.id, reason: 'no_answer' });
+        sendGlobalToUser(data.targetId, {
+          event: 'call:end',
+          callId: call.id,
+          reason: 'no_answer',
+        });
       }
     }, 30_000);
     ringTimeout.unref();
@@ -750,16 +814,26 @@ async function handleTypedCallMessage(
       return;
     }
     const usage = await CallService.getDailyPairUsage(userId, peerId);
-    sendGlobalToUser(peerId, { event: 'call:accept', callId: call.id, fromUserId: userId, ...usage });
+    sendGlobalToUser(peerId, {
+      event: 'call:accept',
+      callId: call.id,
+      fromUserId: userId,
+      ...usage,
+    });
     ws.send(JSON.stringify({ event: 'call:accepted', callId: call.id, ...usage }));
     return;
   }
 
-  if (data.type === 'webrtc:offer' || data.type === 'webrtc:answer' || data.type === 'webrtc:ice-candidate') {
+  if (
+    data.type === 'webrtc:offer' ||
+    data.type === 'webrtc:answer' ||
+    data.type === 'webrtc:ice-candidate'
+  ) {
     if (call.status !== CallStatus.ONGOING) return;
-    const mediaPayload = data.type === 'webrtc:ice-candidate'
-      ? { candidate: data.candidate }
-      : { description: data.description };
+    const mediaPayload =
+      data.type === 'webrtc:ice-candidate'
+        ? { candidate: data.candidate }
+        : { description: data.description };
     sendGlobalToUser(peerId, {
       event: data.type,
       callId: call.id,
@@ -769,13 +843,14 @@ async function handleTypedCallMessage(
     return;
   }
 
-  const status = data.type === 'call:reject'
-    ? CallStatus.REJECTED
-    : data.type === 'call:busy'
-      ? CallStatus.BUSY
-      : call.status === CallStatus.RINGING
-        ? CallStatus.CANCELLED
-        : CallStatus.COMPLETED;
+  const status =
+    data.type === 'call:reject'
+      ? CallStatus.REJECTED
+      : data.type === 'call:busy'
+        ? CallStatus.BUSY
+        : call.status === CallStatus.RINGING
+          ? CallStatus.CANCELLED
+          : CallStatus.COMPLETED;
   const now = new Date();
   const duration = call.startedAt
     ? Math.max(0, Math.floor((now.getTime() - call.startedAt.getTime()) / 1000))
@@ -827,14 +902,16 @@ async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any)
   if (data.type === 'incoming_call') {
     const usage = await CallService.getDailyPairUsage(userId, targetId);
     if (usage.remainingSeconds <= 0) {
-      ws.send(JSON.stringify({
-        event: 'call_rejected',
-        reason: 'daily_limit_exceeded',
-        limitSeconds: usage.limitSeconds,
-        usedSeconds: usage.usedSeconds,
-        remainingSeconds: 0,
-        resetAt: usage.resetAt,
-      }));
+      ws.send(
+        JSON.stringify({
+          event: 'call_rejected',
+          reason: 'daily_limit_exceeded',
+          limitSeconds: usage.limitSeconds,
+          usedSeconds: usage.usedSeconds,
+          remainingSeconds: 0,
+          resetAt: usage.resetAt,
+        }),
+      );
       return;
     }
 
@@ -866,16 +943,18 @@ async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any)
       resetAt: usage.resetAt,
     };
     const delivered = sendGlobalToUser(targetId, incomingPayload);
-    ws.send(JSON.stringify({
-      event: 'call_initiated',
-      callId: call.id,
-      receiverId: targetId,
-      delivered,
-      limitSeconds: usage.limitSeconds,
-      usedSeconds: usage.usedSeconds,
-      remainingSeconds: usage.remainingSeconds,
-      resetAt: usage.resetAt,
-    }));
+    ws.send(
+      JSON.stringify({
+        event: 'call_initiated',
+        callId: call.id,
+        receiverId: targetId,
+        delivered,
+        limitSeconds: usage.limitSeconds,
+        usedSeconds: usage.usedSeconds,
+        remainingSeconds: usage.remainingSeconds,
+        resetAt: usage.resetAt,
+      }),
+    );
 
     if (!delivered) {
       await prisma.call.update({
@@ -884,11 +963,16 @@ async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any)
       });
       ws.send(JSON.stringify({ event: 'call_rejected', callId: call.id, reason: 'offline' }));
       if (targetUser.fcmToken) {
-        sendPushNotification(targetUser.fcmToken, 'Incoming call', `${incomingPayload.callerName} is calling you`, {
-          kind: 'call_incoming',
-          callId: String(call.id),
-          callerId: String(userId),
-        }).catch((err) => logger.error('Error sending incoming call push notification:', err));
+        sendPushNotification(
+          targetUser.fcmToken,
+          'Incoming call',
+          `${incomingPayload.callerName} is calling you`,
+          {
+            kind: 'call_incoming',
+            callId: String(call.id),
+            callerId: String(userId),
+          },
+        ).catch((err) => logger.error('Error sending incoming call push notification:', err));
       }
     }
     return;
@@ -917,15 +1001,17 @@ async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any)
   if (data.type === 'call_accepted') {
     const usage = await CallService.getDailyPairUsage(userId, targetId);
     if (usage.remainingSeconds <= 0) {
-      ws.send(JSON.stringify({
-        event: 'call_rejected',
-        callId,
-        reason: 'daily_limit_exceeded',
-        limitSeconds: usage.limitSeconds,
-        usedSeconds: usage.usedSeconds,
-        remainingSeconds: 0,
-        resetAt: usage.resetAt,
-      }));
+      ws.send(
+        JSON.stringify({
+          event: 'call_rejected',
+          callId,
+          reason: 'daily_limit_exceeded',
+          limitSeconds: usage.limitSeconds,
+          usedSeconds: usage.usedSeconds,
+          remainingSeconds: 0,
+          resetAt: usage.resetAt,
+        }),
+      );
       sendGlobalToUser(targetId, {
         event: 'call_rejected',
         callId,
@@ -953,14 +1039,16 @@ async function handleGlobalCallMessage(ws: WebSocket, userId: number, data: any)
       remainingSeconds: usage.remainingSeconds,
       resetAt: usage.resetAt,
     });
-    ws.send(JSON.stringify({
-      event: 'call_limit_started',
-      callId,
-      limitSeconds: usage.limitSeconds,
-      usedSeconds: usage.usedSeconds,
-      remainingSeconds: usage.remainingSeconds,
-      resetAt: usage.resetAt,
-    }));
+    ws.send(
+      JSON.stringify({
+        event: 'call_limit_started',
+        callId,
+        limitSeconds: usage.limitSeconds,
+        usedSeconds: usage.usedSeconds,
+        remainingSeconds: usage.remainingSeconds,
+        resetAt: usage.resetAt,
+      }),
+    );
     sendGlobalToUser(targetId, {
       event: 'call_limit_started',
       callId,

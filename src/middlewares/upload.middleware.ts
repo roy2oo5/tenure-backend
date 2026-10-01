@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { RequestHandler } from 'express';
 import { AppError } from '../utils/app-error';
 
 // Memory storage is used to easily redirect streams/buffers to S3 or write to disk if falling back
@@ -33,6 +34,43 @@ export const uploadMiddleware = multer({
   },
 });
 
+export const MAX_GALLERY_PHOTO_BYTES = 5 * 1024 * 1024;
+
+const galleryMulter = multer({
+  storage,
+  fileFilter: imageFileFilter,
+  limits: {
+    // Multer treats a file that reaches its limit as oversized. Allow one
+    // additional byte, then enforce the inclusive 5 MB maximum below.
+    fileSize: MAX_GALLERY_PHOTO_BYTES + 1,
+  },
+});
+
+export function galleryUploadFields(
+  fields: Array<{ name: string; maxCount?: number }>,
+): RequestHandler {
+  const upload = galleryMulter.fields(fields);
+  return (req, res, next) => {
+    upload(req, res, (error: unknown) => {
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        next(new AppError('Each gallery photo must be 5 MB or smaller.', 413));
+        return;
+      }
+      if (!error) {
+        const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+        const hasOversizedFile = Object.values(files ?? {}).some((entries) =>
+          entries.some((file) => file.size > MAX_GALLERY_PHOTO_BYTES),
+        );
+        if (hasOversizedFile) {
+          next(new AppError('Each gallery photo must be 5 MB or smaller.', 413));
+          return;
+        }
+      }
+      next(error);
+    });
+  };
+}
+
 export const genericUploadMiddleware = multer({
   storage,
   fileFilter: genericFileFilter,
@@ -44,8 +82,11 @@ export const genericUploadMiddleware = multer({
 export const aadhaarCredentialUploadMiddleware = multer({
   storage,
   fileFilter: (_req, file, cb) => {
-    const isZip = file.originalname.toLowerCase().endsWith('.zip') &&
-      ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(file.mimetype);
+    const isZip =
+      file.originalname.toLowerCase().endsWith('.zip') &&
+      ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(
+        file.mimetype,
+      );
     if (!isZip) {
       return cb(new AppError('A ZIP file from the myAadhaar app is expected.', 400) as any, false);
     }

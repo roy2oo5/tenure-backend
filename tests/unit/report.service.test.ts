@@ -10,7 +10,9 @@ vi.mock('@/config/database', () => ({
 }));
 
 describe('ReportService meeting eligibility', () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('rejects reports before the users have a started meeting', async () => {
     (prisma.user.findUnique as any).mockResolvedValue({ id: 2 });

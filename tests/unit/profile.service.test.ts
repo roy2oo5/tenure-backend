@@ -8,7 +8,9 @@ vi.mock('@/config/database', () => ({
     profile: {
       upsert: vi.fn(),
       findUnique: vi.fn(),
+      update: vi.fn(),
     },
+    request: { findFirst: vi.fn() },
     user: {
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -22,6 +24,10 @@ vi.mock('@/utils/tenure-id', () => ({
 
 vi.mock('@/services/websocket.service', () => ({
   sendGlobalToAll: vi.fn(),
+}));
+
+vi.mock('@/services/ready-now-profile-expiration.service', () => ({
+  scheduleReadyNowProfileExpiration: vi.fn(),
 }));
 
 const extendedProfileDefaults = {
@@ -77,6 +83,12 @@ const extendedProfileDefaults = {
   emergencyName: null,
   emergencyPhone: null,
   emergencyRelation: null,
+  contactEmail: null,
+  defaultUpiId: null,
+  readyNowEnabled: false,
+  upiIds: [],
+  whatsappNumber: null,
+  whatsappUsername: null,
 };
 
 describe('ProfileService', () => {
@@ -85,6 +97,69 @@ describe('ProfileService', () => {
   });
 
   describe('upsertProfile', () => {
+    it('keeps Ready Now active when public profile visibility is turned off', async () => {
+      const expiry = new Date(Date.now() + 60 * 60 * 1000);
+      const data = {
+        fullName: 'Ready User',
+        dob: new Date('1995-12-15'),
+        gender: 'female',
+        languages: ['English'],
+        categories: ['Shopping support'],
+        profileVisibility: false,
+      };
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
+      (prisma.profile.findUnique as any).mockResolvedValue({
+        ...extendedProfileDefaults,
+        instantAvailable: true,
+        readyNowEnabled: true,
+        instantAvailableUntil: expiry,
+        profileVisibility: true,
+      });
+      (prisma.profile.upsert as any).mockResolvedValue({
+        ...data,
+        instantAvailable: true,
+        readyNowEnabled: true,
+        instantAvailableUntil: expiry,
+      });
+
+      await ProfileService.upsertProfile(123, data);
+
+      expect(prisma.profile.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            profileVisibility: false,
+            instantAvailable: true,
+            readyNowEnabled: true,
+            instantAvailableUntil: expiry,
+          }),
+        }),
+      );
+    });
+
+    it('allows Ready Now to be enabled while public profile visibility is off', async () => {
+      (prisma.profile.findUnique as any).mockResolvedValue({
+        profileVisibility: false,
+        latitude: 12.97,
+        longitude: 77.59,
+        instantCategories: [],
+        instantNote: null,
+      });
+      (prisma.request.findFirst as any).mockResolvedValue(null);
+      (prisma.profile.update as any).mockImplementation(async ({ data }: any) => data);
+
+      await ProfileService.updateReadyNow(123, { instantAvailable: true });
+
+      expect(prisma.profile.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            instantAvailable: true,
+            readyNowEnabled: true,
+            instantAvailableUntil: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
     it('should upsert profile successfully', async () => {
       const mockProfileData = {
         profilePhoto: 'https://example.com/photo.jpg',
@@ -125,7 +200,7 @@ describe('ProfileService', () => {
       });
       expect(prisma.profile.findUnique).toHaveBeenCalledWith({
         where: { userId: 123 },
-        select: {
+        select: expect.objectContaining({
           aadhaarVerified: true,
           aadhaarMasked: true,
           aadhaarName: true,
@@ -147,7 +222,7 @@ describe('ProfileService', () => {
           emergencyRelation: true,
           state: true,
           weeklyAvailability: true,
-        },
+        }),
       });
       expect(prisma.profile.upsert).toHaveBeenCalledWith({
         where: { userId: 123 },
@@ -223,7 +298,7 @@ describe('ProfileService', () => {
       );
     });
 
-    it('should give a 16 year old the full standard profile capabilities', async () => {
+    it('should reject profile creation for a 16 year old', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2027-06-20T08:00:00.000Z'));
 
@@ -241,37 +316,13 @@ describe('ProfileService', () => {
         instantAvailable: true,
       };
 
-      const mockResponse = {
-        id: 2002,
-        userId: 123,
-        ...mockProfileData,
-        isMinor: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
       (prisma.user.findUnique as any).mockResolvedValue({ id: 123, tenureId: 'AB123' });
       (prisma.profile.findUnique as any).mockResolvedValue(null);
-      (prisma.profile.upsert as any).mockResolvedValue(mockResponse);
 
-      await ProfileService.upsertProfile(123, mockProfileData);
-
-      expect(prisma.profile.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          update: expect.objectContaining({
-            isMinor: false,
-            categories: ['Open to any'],
-            hourlyRate: 100,
-            instantAvailable: true,
-          }),
-          create: expect.objectContaining({
-            isMinor: false,
-            categories: ['Open to any'],
-            hourlyRate: 100,
-            instantAvailable: true,
-          }),
-        }),
+      await expect(ProfileService.upsertProfile(123, mockProfileData)).rejects.toThrow(
+        'Age limitation is applicable',
       );
+      expect(prisma.profile.upsert).not.toHaveBeenCalled();
 
       vi.useRealTimers();
     });

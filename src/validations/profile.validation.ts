@@ -104,6 +104,9 @@ export const createProfileSchema = z.object({
     facebook: z.string().optional().nullable(),
     youtube: z.string().optional().nullable(),
     website: z.string().optional().nullable(),
+    contactEmail: z.string().trim().email('Enter a valid contact email').max(254).optional().nullable(),
+    whatsappUsername: z.string().trim().max(80).optional().nullable(),
+    whatsappNumber: z.string().trim().regex(/^\+?[0-9]{10,15}$/, 'Enter a valid WhatsApp number').optional().nullable(),
     instantAvailable: z.boolean().optional(),
     instantAvailableUntil: z.preprocess((arg) => {
       if (arg === null || arg === undefined || arg === '') {

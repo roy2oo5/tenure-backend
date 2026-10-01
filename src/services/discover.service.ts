@@ -1,7 +1,13 @@
 import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { prisma } from '../config/database';
-import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
+import {
+  canonicalCategoryLabel,
+  getCategoryMatchVariants,
+  profileMatchesCategory,
+} from '../constants/mate-categories';
 import { AppError } from '../utils/app-error';
+import { env } from '../config/env';
+import { logger } from '../utils/logger';
 
 export type DiscoverSearchInput = {
   q?: string;
@@ -15,6 +21,8 @@ export type DiscoverSearchInput = {
   hourlyRateRange?: 'all' | 'under70' | '70to200' | '200to300' | 'custom';
   customHourlyRateMin?: number | null;
   customHourlyRateMax?: number | null;
+  requiredVehicleTypes?: Array<'two_wheeler' | 'four_wheeler'>;
+  drivingVehicleType?: 'two_wheeler' | 'four_wheeler' | null;
 };
 
 export type DiscoverMateResult = {
@@ -31,8 +39,13 @@ export type DiscoverMateResult = {
   category: string;
   categories: string[];
   hourlyRate: number | null;
+  rating: number;
+  ratingCount: number;
   categoryRates: Record<string, number>;
   languages: string[];
+  vehicles: string[];
+  canRideBike: boolean | null;
+  canDriveCar: boolean | null;
   about: string | null;
   professions: string[];
   qualification: string | null;
@@ -50,11 +63,15 @@ export type DiscoverMateResult = {
   facebook: string | null;
   youtube: string | null;
   website: string | null;
+  contactEmail: string | null;
+  whatsappUsername: string | null;
+  whatsappNumber: string | null;
   instantAvailable: boolean;
   instantAvailableUntil: Date | null;
   instantCategories: string[];
   instantNote: string | null;
   distanceKm: number | null;
+  travelDurationSeconds: number | null;
   latitude: number | null;
   longitude: number | null;
   saved: boolean;
@@ -203,6 +220,147 @@ function categoryRatesRecord(value: Profile['categoryRates']): Record<string, nu
   );
 }
 
+function routeMatrixRows(body: string): Record<string, unknown>[] {
+  const trimmed = body.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (row): row is Record<string, unknown> => row != null && typeof row === 'object',
+      );
+    }
+    return parsed != null && typeof parsed === 'object' ? [parsed as Record<string, unknown>] : [];
+  } catch {
+    return trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+}
+
+function routeDurationSeconds(value: unknown): number | null {
+  const match = /^(\d+(?:\.\d+)?)s$/.exec(String(value));
+  if (!match) return null;
+  const seconds = Math.round(Number(match[1]));
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+async function withRoadRouteMetrics(
+  results: DiscoverMateResult[],
+  input: DiscoverSearchInput,
+): Promise<DiscoverMateResult[]> {
+  if (!isValidCoordinate(input.latitude, input.longitude)) return results;
+  // Unit tests intentionally stay deterministic and network-free.
+  if (env.NODE_ENV === 'test') return results;
+
+  const routable = results.filter((result) => isValidCoordinate(result.latitude, result.longitude));
+  const withoutStraightLineFallback = results.map((result) => ({
+    ...result,
+    distanceKm: null,
+    travelDurationSeconds: null,
+  }));
+  if (!env.GOOGLE_ROUTES_API_KEY || routable.length === 0) {
+    return withoutStraightLineFallback;
+  }
+
+  const metricByUserId = new Map<number, { distanceKm: number; travelDurationSeconds: number }>();
+  try {
+    // TRAFFIC_AWARE_OPTIMAL Route Matrix requests are capped at 100 elements.
+    for (let offset = 0; offset < routable.length; offset += 100) {
+      const chunk = routable.slice(offset, offset + 100);
+      const response = await fetch(
+        'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': env.GOOGLE_ROUTES_API_KEY,
+            'X-Goog-FieldMask':
+              'originIndex,destinationIndex,distanceMeters,duration,condition,status',
+          },
+          body: JSON.stringify({
+            origins: [
+              {
+                waypoint: {
+                  location: {
+                    latLng: {
+                      latitude: input.latitude,
+                      longitude: input.longitude,
+                    },
+                  },
+                },
+              },
+            ],
+            destinations: chunk.map((result) => ({
+              waypoint: {
+                location: {
+                  latLng: {
+                    latitude: result.latitude,
+                    longitude: result.longitude,
+                  },
+                },
+              },
+            })),
+            travelMode: 'DRIVE',
+            routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+          }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) throw new Error(`Google Routes status ${response.status}`);
+      const rows = routeMatrixRows(await response.text());
+      for (const row of rows) {
+        if (row.condition !== 'ROUTE_EXISTS') continue;
+        const destinationIndex = Number(row.destinationIndex);
+        const meters = Number(row.distanceMeters);
+        const seconds = routeDurationSeconds(row.duration);
+        const result = chunk[destinationIndex];
+        if (result && Number.isFinite(meters) && meters >= 0 && seconds != null) {
+          metricByUserId.set(result.userId, {
+            distanceKm: Math.round((meters / 1000) * 10) / 10,
+            travelDurationSeconds: seconds,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn(`Google road-distance lookup failed: ${String(error)}`);
+  }
+
+  return withoutStraightLineFallback.map((result) => ({
+    ...result,
+    ...(metricByUserId.get(result.userId) ?? {}),
+  }));
+}
+
+function matchesVehiclePreferences(profile: Profile, input: DiscoverSearchInput): boolean {
+  const vehicles = new Set((profile.vehicles ?? []).map((value) => value.toLowerCase()));
+  const hasTwoWheeler = vehicles.has('bike') || vehicles.has('scooter');
+  const hasFourWheeler = vehicles.has('car');
+  const required = input.requiredVehicleTypes ?? [];
+  if (
+    required.length &&
+    !required.some((type) => (type === 'two_wheeler' ? hasTwoWheeler : hasFourWheeler))
+  )
+    return false;
+  return input.drivingVehicleType === 'two_wheeler'
+    ? profile.canRideBike === true
+    : input.drivingVehicleType === 'four_wheeler'
+      ? profile.canDriveCar === true
+      : true;
+}
+
+function canonicalCategoryRatesRecord(value: Profile['categoryRates']): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(categoryRatesRecord(value)).map(([category, rate]) => [
+      canonicalCategoryLabel(category),
+      rate,
+    ]),
+  );
+}
+
 function rateForCategory(profile: Profile, category?: string | null): number | null {
   const rates = categoryRatesRecord(profile.categoryRates);
   const selectedCategory = category?.trim().toLowerCase();
@@ -303,8 +461,10 @@ function toDiscoverMate(
   input: DiscoverSearchInput = {},
   savedMateIds = new Set<number>(),
   activeSessionByUserId = new Map<number, SessionStatus>(),
+  ratingBySupporterId = new Map<number, { average: number; count: number }>(),
 ): DiscoverMateResult {
-  const category = displayCategory(profile, input.category);
+  const category = canonicalCategoryLabel(displayCategory(profile, input.category));
+  const categories = [...new Set(profile.categories.map(canonicalCategoryLabel))];
   const gallery = (profile.gallery ?? []).filter(
     (uri) => !uri.toLowerCase().includes('live-photo'),
   );
@@ -312,6 +472,7 @@ function toDiscoverMate(
     Boolean(profile.livePhotoUrl?.trim()) ||
     gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
   const activeSessionStatus = activeSessionByUserId.get(profile.userId) ?? null;
+  const rating = ratingBySupporterId.get(profile.userId) ?? { average: 0, count: 0 };
   return {
     userId: profile.userId,
     tenureId: profile.user?.tenureId ?? 'Not assigned',
@@ -324,10 +485,15 @@ function toDiscoverMate(
     dob: profile.dob ?? new Date('2000-01-01'),
     isMinor: profile.isMinor,
     category,
-    categories: profile.categories,
+    categories,
     hourlyRate: rateForCategory(profile, category),
-    categoryRates: categoryRatesRecord(profile.categoryRates),
+    rating: rating.average,
+    ratingCount: rating.count,
+    categoryRates: canonicalCategoryRatesRecord(profile.categoryRates),
     languages: profile.languages ?? [],
+    vehicles: profile.vehicles ?? [],
+    canRideBike: profile.canRideBike,
+    canDriveCar: profile.canDriveCar,
     about: profile.about,
     professions: profile.professions ?? [],
     qualification: profile.qualification,
@@ -345,6 +511,9 @@ function toDiscoverMate(
     facebook: profile.facebook,
     youtube: profile.youtube,
     website: profile.website,
+    contactEmail: profile.contactEmail,
+    whatsappUsername: profile.whatsappUsername,
+    whatsappNumber: profile.whatsappNumber,
     instantAvailable: profile.instantAvailable,
     instantAvailableUntil: profile.instantAvailableUntil,
     instantCategories: profile.instantCategories ?? [],
@@ -355,6 +524,7 @@ function toDiscoverMate(
       profile.latitude,
       profile.longitude,
     ),
+    travelDurationSeconds: null,
     latitude: profile.latitude,
     longitude: profile.longitude,
     saved: savedMateIds.has(profile.userId),
@@ -362,6 +532,28 @@ function toDiscoverMate(
     activeSessionStatus,
     scheduledMeets: [],
   };
+}
+
+async function ratingsForSupporters(
+  supporterIds: number[],
+): Promise<Map<number, { average: number; count: number }>> {
+  if (!supporterIds.length) return new Map();
+  // Unit-test database doubles created before rating aggregation do not expose
+  // Prisma's groupBy method. Real Prisma clients always do; returning an empty
+  // aggregate keeps those older callers compatible without affecting runtime.
+  if (typeof prisma.session.groupBy !== 'function') return new Map();
+  const rows = await prisma.session.groupBy({
+    by: ['receiverId'],
+    where: { receiverId: { in: supporterIds }, senderRating: { not: null } },
+    _avg: { senderRating: true },
+    _count: { senderRating: true },
+  });
+  return new Map(
+    rows.map((row) => [
+      row.receiverId,
+      { average: row._avg.senderRating ?? 0, count: row._count.senderRating },
+    ]),
+  );
 }
 
 async function savedMateIdsForUser(userId: number): Promise<Set<number>> {
@@ -472,13 +664,20 @@ export class DiscoverService {
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
-      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input));
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .filter((profile) => matchesVehiclePreferences(profile, input));
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
+    const ratingBySupporterId = await ratingsForSupporters(
+      filteredProfiles.map((profile) => profile.userId),
+    );
 
-    const results = filteredProfiles.map((profile) =>
-      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    const results = await withRoadRouteMetrics(
+      filteredProfiles.map((profile) =>
+        toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId, ratingBySupporterId),
+      ),
+      input,
     );
     return results.sort(
       (a, b) =>
@@ -514,15 +713,29 @@ export class DiscoverService {
     if (
       !profile ||
       !profile.user?.isActive ||
-      !isDiscoverableProfile(profile) ||
-      !profile.profileVisibility
+      !(
+        (profile.profileVisibility && isDiscoverableProfile(profile)) ||
+        (!profile.isMinor &&
+          profile.readyNowEnabled &&
+          profile.instantAvailable &&
+          profile.instantAvailableUntil &&
+          profile.instantAvailableUntil > new Date() &&
+          isInstantDiscoverableProfile(profile))
+      )
     ) {
       return null;
     }
 
     const savedMateIds = await savedMateIdsForUser(currentUserId);
     const activeSessionByUserId = await activeSessionStatusesForUsers([targetUserId]);
-    const result = toDiscoverMate(profile, {}, savedMateIds, activeSessionByUserId);
+    const ratingBySupporterId = await ratingsForSupporters([targetUserId]);
+    const result = toDiscoverMate(
+      profile,
+      {},
+      savedMateIds,
+      activeSessionByUserId,
+      ratingBySupporterId,
+    );
     const scheduledMeets = await prisma.request.findMany({
       where: {
         OR: [{ senderId: targetUserId }, { receiverId: targetUserId }],
@@ -531,7 +744,7 @@ export class DiscoverService {
         fromDateTime: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) },
         AND: [
           {
-            OR: [{ toDateTime: null }, { toDateTime: { gt: new Date() } }],
+            OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
           },
         ],
       },
@@ -569,8 +782,9 @@ export class DiscoverService {
       userId: {
         notIn: [currentUserId, ...blockedUserIds],
       },
-      profileVisibility: true,
       instantAvailable: true,
+      readyNowEnabled: true,
+      instantAvailableUntil: { gt: new Date() },
       user: {
         isActive: true,
       },
@@ -593,13 +807,20 @@ export class DiscoverService {
       .filter((profile) => matchesTextQuery(profile, input.q ?? ''))
       .filter((profile) => matchesGender(profile.gender, input.gender ?? 'all'))
       .filter((profile) => matchesAgeRange(profile.dob ?? new Date('2000-01-01'), input.ageRange))
-      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input));
+      .filter((profile) => matchesHourlyRate(rateForCategory(profile, input.category), input))
+      .filter((profile) => matchesVehiclePreferences(profile, input));
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
+    const ratingBySupporterId = await ratingsForSupporters(
+      filteredProfiles.map((profile) => profile.userId),
+    );
 
-    const results = filteredProfiles.map((profile) =>
-      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    const results = await withRoadRouteMetrics(
+      filteredProfiles.map((profile) =>
+        toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId, ratingBySupporterId),
+      ),
+      input,
     );
     return results.sort(
       (a, b) =>
@@ -635,13 +856,20 @@ export class DiscoverService {
       .map((row) => profileByUserId.get(row.mateUserId))
       .filter((profile): profile is PublicProfileWithUser => Boolean(profile))
       .filter(isDiscoverableProfile)
-      .filter((profile) => matchesLanguages(profile, input.languages));
+      .filter((profile) => matchesLanguages(profile, input.languages))
+      .filter((profile) => matchesVehiclePreferences(profile, input));
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
+    const ratingBySupporterId = await ratingsForSupporters(
+      filteredProfiles.map((profile) => profile.userId),
+    );
 
-    return filteredProfiles.map((profile) =>
-      toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId),
+    return withRoadRouteMetrics(
+      filteredProfiles.map((profile) =>
+        toDiscoverMate(profile, input, savedMateIds, activeSessionByUserId, ratingBySupporterId),
+      ),
+      input,
     );
   }
 

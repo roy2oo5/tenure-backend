@@ -7,6 +7,8 @@ import { seedCategories } from './utils/seed';
 import { startMessageRetentionCleanup } from './services/message-retention.service';
 import { startSessionAutoPauseScheduler } from './services/session.service';
 import { startReadyNowExpirationScheduler } from './services/request-expiration.service';
+import { startReadyNowProfileExpirationScheduler } from './services/ready-now-profile-expiration.service';
+import { startScheduledSessionReminderScheduler } from './services/scheduled-session-reminder.service';
 
 // Standard Uncaught Exception handler
 process.on('uncaughtException', (err) => {
@@ -33,6 +35,8 @@ const boot = async () => {
   startMessageRetentionCleanup();
   startSessionAutoPauseScheduler();
   startReadyNowExpirationScheduler();
+  startReadyNowProfileExpirationScheduler();
+  startScheduledSessionReminderScheduler();
 };
 
 boot();

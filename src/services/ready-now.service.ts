@@ -14,6 +14,9 @@ async function setAvailabilityForEnabledUsers(
         userId,
         readyNowEnabled: true,
         instantAvailable: !instantAvailable,
+        ...(instantAvailable
+          ? { instantAvailableUntil: { gt: new Date() } }
+          : {}),
       },
       data: { instantAvailable },
     });

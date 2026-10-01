@@ -1,8 +1,63 @@
 import { Request, Response, NextFunction } from 'express';
 import { RequestService } from '../services/request.service';
 import { AppError } from '../utils/app-error';
+import { MeetRouteMetricsService } from '../services/meet-route-metrics.service';
 
 export class RequestController {
+  public static async createQuickPick(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const result = await RequestService.createQuickPick(req.user.id, req.body);
+      res.status(201).json({ status: 'success', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async quickPickStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const result = await RequestService.getQuickPickStatus(req.user.id, req.params.groupId);
+      res.status(200).json({ status: 'success', data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async cancelQuickPick(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      await RequestService.cancelQuickPick(req.user.id, req.params.groupId);
+      res.status(200).json({ status: 'success' });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async routeMetrics(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const requestId = Number.parseInt(req.params.id, 10);
+      if (!Number.isSafeInteger(requestId)) return next(new AppError('Invalid request ID.', 400));
+      const metrics = await MeetRouteMetricsService.getForRequest(req.user.id, requestId);
+      res.status(200).json({ status: 'success', data: { metrics } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   public static async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) {

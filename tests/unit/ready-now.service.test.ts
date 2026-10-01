@@ -9,7 +9,9 @@ vi.mock('@/config/database', () => ({
 vi.mock('@/services/websocket.service', () => ({ sendGlobalToAll: vi.fn() }));
 
 describe('Ready Now meeting lifecycle', () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('temporarily suspends only users who still have Ready Now enabled', async () => {
     (prisma.profile.updateMany as any)
@@ -38,6 +40,7 @@ describe('Ready Now meeting lifecycle', () => {
         userId: 1,
         readyNowEnabled: true,
         instantAvailable: false,
+        instantAvailableUntil: { gt: expect.any(Date) },
       },
       data: { instantAvailable: true },
     });

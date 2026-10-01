@@ -4,6 +4,7 @@ import { generateUniqueTenureId } from '../utils/tenure-id';
 import { AppError } from '../utils/app-error';
 import { enforceAgeRestriction } from '../utils/age-restriction';
 import { sendGlobalToAll } from './websocket.service';
+import { scheduleReadyNowProfileExpiration } from './ready-now-profile-expiration.service';
 import {
   processAadhaarSecureQR,
   AadhaarDemographics,
@@ -51,6 +52,9 @@ export type ProfileUpsertInput = {
   facebook?: string | null;
   youtube?: string | null;
   website?: string | null;
+  contactEmail?: string | null;
+  whatsappUsername?: string | null;
+  whatsappNumber?: string | null;
   instantAvailable?: boolean;
   instantAvailableUntil?: Date | null;
   instantCategories?: string[] | null;
@@ -163,6 +167,9 @@ export class ProfileService {
         emergencyRelation: true,
         upiIds: true,
         defaultUpiId: true,
+        contactEmail: true,
+        whatsappUsername: true,
+        whatsappNumber: true,
       },
     });
 
@@ -196,7 +203,7 @@ export class ProfileService {
       data.profileVisibility !== undefined
         ? data.profileVisibility
         : (existingProfile?.profileVisibility ?? true);
-    const instantAvailable = profileVisibility && requestedInstantAvailable;
+    const instantAvailable = requestedInstantAvailable;
     const notifyRequests =
       data.notifyRequests !== undefined
         ? data.notifyRequests
@@ -305,12 +312,23 @@ export class ProfileService {
       facebook: data.facebook ?? null,
       youtube: data.youtube ?? null,
       website: data.website ?? null,
+      contactEmail:
+        data.contactEmail !== undefined
+          ? data.contactEmail?.trim().toLowerCase() || null
+          : (existingProfile?.contactEmail ?? null),
+      whatsappUsername:
+        data.whatsappUsername !== undefined
+          ? data.whatsappUsername?.trim() || null
+          : (existingProfile?.whatsappUsername ?? null),
+      whatsappNumber:
+        data.whatsappNumber !== undefined
+          ? data.whatsappNumber?.trim() || null
+          : (existingProfile?.whatsappNumber ?? null),
       instantAvailable,
       readyNowEnabled:
-        profileVisibility &&
-        (data.instantAvailable !== undefined
+        data.instantAvailable !== undefined
           ? data.instantAvailable
-          : (existingProfile?.readyNowEnabled ?? false)),
+          : (existingProfile?.readyNowEnabled ?? false),
       instantAvailableUntil: instantAvailable ? instantAvailableUntil : null,
       instantCategories: instantAvailable ? instantCategories : [],
       instantNote: instantAvailable ? instantNote : null,
@@ -562,12 +580,7 @@ export class ProfileService {
     }
     const latitude = data.latitude ?? existing.latitude;
     const longitude = data.longitude ?? existing.longitude;
-    if (data.instantAvailable && !existing.profileVisibility) {
-      throw new AppError(
-        'Make your profile public before enabling Ready Now.',
-        409,
-      );
-    }
+    let instantAvailableUntil: Date | null = null;
     if (data.instantAvailable && (latitude == null || longitude == null)) {
       throw new AppError('Location is required to enable Ready Now', 400);
     }
@@ -579,6 +592,7 @@ export class ProfileService {
           offsetMs,
       );
       const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      instantAvailableUntil = end;
       const scheduledMeeting = await prisma.request.findFirst({
         where: {
           status: RequestStatus.CONFIRMED,
@@ -611,7 +625,7 @@ export class ProfileService {
       data: {
         instantAvailable: data.instantAvailable,
         readyNowEnabled: data.instantAvailable,
-        instantAvailableUntil: data.instantAvailable ? existing.instantAvailableUntil : null,
+        instantAvailableUntil,
         instantCategories: data.instantAvailable ? existing.instantCategories : [],
         instantNote: data.instantAvailable ? existing.instantNote : null,
         ...(data.latitude !== undefined ? { latitude } : {}),
@@ -623,6 +637,9 @@ export class ProfileService {
       userId,
       instantAvailable: profile.instantAvailable,
     });
+    if (instantAvailableUntil) {
+      scheduleReadyNowProfileExpiration(instantAvailableUntil);
+    }
     return profile;
   }
 }

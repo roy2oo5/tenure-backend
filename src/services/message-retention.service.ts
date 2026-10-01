@@ -10,15 +10,15 @@ let cleanupTimer: NodeJS.Timeout | null = null;
 let scheduledWakeAt: number | null = null;
 
 export async function deleteExpiredMessages(now = new Date()): Promise<number> {
-  const expiredVoiceMessages = await prisma.message.findMany({
+  const expiredMediaMessages = await prisma.message.findMany({
     where: {
       expiresAt: { lte: now },
-      type: 'voice',
+      OR: [{ type: 'voice' }, { viewOnce: true }],
       mediaUrl: { not: null },
     },
     select: { mediaUrl: true },
   });
-  for (const message of expiredVoiceMessages) {
+  for (const message of expiredMediaMessages) {
     if (message.mediaUrl) await UploadService.deleteUploadedFile(message.mediaUrl);
   }
   const result = await prisma.message.deleteMany({

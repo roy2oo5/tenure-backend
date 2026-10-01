@@ -1,7 +1,11 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { protect } from '../middlewares/auth.middleware';
 import { UploadController } from '../controllers/upload.controller';
-import { genericUploadMiddleware, uploadMiddleware } from '../middlewares/upload.middleware';
+import {
+  galleryUploadFields,
+  genericUploadMiddleware,
+  uploadMiddleware,
+} from '../middlewares/upload.middleware';
 
 const router = Router();
 
@@ -16,7 +20,7 @@ const profileUploadMiddleware = uploadMiddleware.fields([
   { name: 'file', maxCount: 1 },
 ]);
 
-const galleryUploadMiddleware = uploadMiddleware.fields([
+const galleryUploadMiddleware = galleryUploadFields([
   { name: 'galleryPhoto', maxCount: 1 },
   { name: 'file', maxCount: 1 },
 ]);

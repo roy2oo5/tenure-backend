@@ -19,9 +19,9 @@ export const seedCategories = async () => {
         'Accompanying someone while shopping, helping them select items, carry bags, or providing company.',
     },
     {
-      name: 'Tech & Education Support',
+      name: 'Day Activity Support',
       description:
-        'Helping someone with technology, learning, or educational needs, such as understanding software, setting up devices, learning new skills, completing assignments, or getting guidance with studies and projects.',
+        'Joining someone for activities such as walking, visiting museums, having coffee, or watching a movie.',
     },
     {
       name: 'Gym, Yoga & Jogging Support',
@@ -29,8 +29,24 @@ export const seedCategories = async () => {
         'Joining someone for workouts, yoga, or jogging and providing motivation or exercise assistance.',
     },
     {
-      name: 'Home Clean-up Support',
-      description: 'Helping someone clean, tidy, organise, or maintain their home.',
+      name: 'Pub, Party & Event Support',
+      description:
+        'Accompanying someone to parties, pubs, celebrations, or social events so they feel comfortable and safe.',
+    },
+    {
+      name: 'Friendly & Emotional Support',
+      description:
+        'Listening, talking, offering encouragement, or spending time together as a supportive friend.',
+    },
+    {
+      name: 'Tourist Guide Support',
+      description:
+        'Providing practical information, advice, and guidance based on the user’s needs.',
+    },
+    {
+      name: 'Tech & Education Support',
+      description:
+        'Helping someone with technology, learning, or educational needs, such as understanding software, setting up devices, learning new skills, completing assignments, or getting guidance with studies and projects.',
     },
     {
       name: 'Driving Support',
@@ -43,34 +59,13 @@ export const seedCategories = async () => {
         'Playing sports together, practising, or accompanying someone to watch a sporting event.',
     },
     {
-      name: 'Pub, Party & Event Support',
-      description:
-        'Accompanying someone to parties, pubs, celebrations, or social events so they feel comfortable and safe.',
-    },
-    {
-      name: 'Holiday & Travel Support',
+      name: 'Travel Support',
       description:
         'Helping someone plan a trip, make bookings, organise an itinerary, or travel as a companion.',
     },
     {
-      name: 'Day Activity Support',
-      description:
-        'Joining someone for activities such as walking, visiting museums, having coffee, or watching a movie.',
-    },
-    {
-      name: 'Friendly & Emotional Support',
-      description:
-        'Listening, talking, offering encouragement, or spending time together as a supportive friend.',
-    },
-    {
-      name: 'Newcomer & Consultant Support',
-      description:
-        'Helping newcomers settle into a city and providing practical information, advice, and guidance based on their needs.',
-    },
-    {
-      name: 'Vlogging Support',
-      description:
-        'Helping someone plan, record, present, or manage content for travel, lifestyle, or activity vlogs.',
+      name: 'Clean-up Support',
+      description: 'Helping someone clean, tidy, organise, or maintain their home.',
     },
   ];
 

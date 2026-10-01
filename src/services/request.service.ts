@@ -3,13 +3,18 @@ import { AppError } from '../utils/app-error';
 import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
 import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
-import { randomInt } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import { otpProximityForRequest } from '../utils/otp-proximity';
-import { getCategoryMatchVariants } from '../constants/mate-categories';
+import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
 import { deleteExpiredMessages } from './message-retention.service';
 import { RealtimeMessageService } from './realtime-message.service';
-import { scheduleReadyNowExpiration } from './request-expiration.service';
+import {
+  confirmedOtpExpiresAt,
+  scheduleConfirmedOtpExpiry,
+  scheduleReadyNowExpiration,
+} from './request-expiration.service';
 import { restoreReadyNow, suspendReadyNow } from './ready-now.service';
+import { scheduleScheduledSessionReminder } from './scheduled-session-reminder.service';
 
 export type CreateRequestInput = {
   receiverId: number;
@@ -33,9 +38,42 @@ export type CreateRequestInput = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges?: boolean;
   readyToPayTip?: boolean;
+  extraSupportAmount?: number | null;
   needsMateVehicle?: boolean;
   offersRequesterVehicle?: boolean;
+  neededMateVehicleTypes?: Array<'two_wheeler' | 'four_wheeler'>;
+  offeredRequesterVehicleType?: 'two_wheeler' | 'four_wheeler' | null;
 };
+
+export type QuickPickInput = {
+  category: string;
+  meetLocation: string;
+  latitude: number;
+  longitude: number;
+  hourlyRate: number;
+  durationMinutes: number;
+  responseTime: number;
+  timezoneOffsetMinutes: number;
+  bookingFor?: 'self' | 'someone_else';
+  beneficiaryName?: string | null;
+  beneficiaryPhone?: string | null;
+  beneficiaryRelation?: string | null;
+  beneficiaryNote?: string | null;
+  message?: string | null;
+  readyToPayTravelCharges?: boolean;
+  readyToPayTip?: boolean;
+  extraSupportAmount?: number | null;
+  neededMateVehicleTypes?: Array<'two_wheeler' | 'four_wheeler'>;
+  offeredRequesterVehicleType?: 'two_wheeler' | 'four_wheeler' | null;
+};
+
+function distanceBetweenKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const radians = (degrees: number) => (degrees * Math.PI) / 180;
+  const a =
+    Math.sin(radians(lat2 - lat1) / 2) ** 2 +
+    Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(radians(lon2 - lon1) / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export type FrontendRequestStatus =
   | 'pending'
@@ -61,6 +99,7 @@ export type MappedRequest = {
   fromDateTime: string;
   toDateTime: string | null;
   instantBooking: boolean;
+  quickPickGroupId?: string | null;
   responseDeadlineAt: string | null;
   message: string;
   bookingFor: 'self' | 'someone_else';
@@ -70,8 +109,11 @@ export type MappedRequest = {
   beneficiaryNote?: string | null;
   readyToPayTravelCharges: boolean;
   readyToPayTip: boolean;
+  extraSupportAmount: number | null;
   needsMateVehicle: boolean;
   offersRequesterVehicle: boolean;
+  neededMateVehicleTypes: string[];
+  offeredRequesterVehicleType: string | null;
   requestHourlyRate: number | null;
   mateGender?: string | null;
   mateDob?: string | null;
@@ -133,10 +175,10 @@ export type MappedRequest = {
   cancelledById?: number | null;
   cancellationFeeApplies: boolean;
   cancellationFeePreview: number;
+  quickChatSuggestions: string[];
 };
 
 const SCHEDULED_REQUEST_LEAD_TIME_MS = 15 * 60 * 1000;
-export const CONFIRMED_REQUEST_EXPIRY_WINDOW_MS = 12 * 60 * 60 * 1000;
 const EXPIRABLE_STATUSES = [
   RequestStatus.PENDING,
   RequestStatus.ACCEPTED_BY_RECEIVER,
@@ -149,6 +191,8 @@ const ACTIVE_DUPLICATE_REQUEST_STATUSES = [
 ] as RequestStatus[];
 const DAY_KEYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 const INSTANT_RESPONSE_WINDOWS_MINUTES = [5, 8, 10, 12, 15, 20] as const;
+const SOMEONE_ELSE_DAILY_BOOKING_LIMIT = 3;
+const SOMEONE_ELSE_BOOKING_LIMIT_MESSAGE = 'You have already booked for 3 people.';
 
 function localDayBounds(date: Date, timezoneOffsetMinutes = 0): { start: Date; end: Date } {
   const offsetMs = timezoneOffsetMinutes * 60 * 1000;
@@ -169,6 +213,20 @@ const activeSessionFilter = {
   OR: [{ session: null }, { session: { is: { status: { not: SessionStatus.ENDED } } } }],
 };
 
+// A confirmed booking reserves its selected date until the support timer is
+// actually ended. Payment and review happen after a support, but must not keep
+// the date Full once the support itself is complete.
+const dateBlockingSessionFilter = {
+  OR: [
+    { session: null },
+    {
+      session: {
+        is: { status: { not: SessionStatus.ENDED } },
+      },
+    },
+  ],
+};
+
 async function scheduledRequestsForUserOnDate(
   userId: number,
   date: Date,
@@ -182,6 +240,7 @@ async function scheduledRequestsForUserOnDate(
         ...(excludeRequestId == null ? {} : { id: { not: excludeRequestId } }),
         instantBooking: false,
         status: RequestStatus.CONFIRMED,
+        AND: [dateBlockingSessionFilter],
         fromDateTime: {
           gte: new Date(start.getTime() - 48 * 60 * 60 * 1000),
           lt: new Date(end.getTime() + 48 * 60 * 60 * 1000),
@@ -200,13 +259,7 @@ function hasMeetOnDate(
   timezoneOffsetMinutes = 0,
 ): boolean {
   const { start, end } = localDayBounds(date, timezoneOffsetMinutes);
-  const now = new Date();
-  return meets.some(
-    (meet) =>
-      meet.fromDateTime >= start &&
-      meet.fromDateTime < end &&
-      (meet.toDateTime == null || meet.toDateTime > now),
-  );
+  return meets.some((meet) => meet.fromDateTime >= start && meet.fromDateTime < end);
 }
 
 const mapStatusToFrontend = (status: RequestStatus): FrontendRequestStatus => {
@@ -254,6 +307,7 @@ const isExpirableStatus = (status: RequestStatus): boolean => EXPIRABLE_STATUSES
 const shouldExpireRequest = (request: {
   status: RequestStatus;
   fromDateTime?: Date | null;
+  timezoneOffsetMinutes?: number | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
   instantBooking?: boolean | null;
@@ -274,7 +328,8 @@ const shouldExpireRequest = (request: {
   );
   const confirmedMeetExpiredWithoutSession = Boolean(
     request.status === RequestStatus.CONFIRMED &&
-    startsAt + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS <= Date.now() &&
+    confirmedOtpExpiresAt(request.fromDateTime!, request.timezoneOffsetMinutes ?? 0).getTime() <=
+      Date.now() &&
     !request.session,
   );
 
@@ -286,15 +341,35 @@ const shouldExpireRequest = (request: {
   );
 };
 
+const isConfirmedOtpGraceExpired = (request: {
+  status: RequestStatus;
+  fromDateTime?: Date | null;
+  timezoneOffsetMinutes?: number | null;
+  session?: unknown | null;
+}): boolean =>
+  request.status === RequestStatus.CONFIRMED &&
+  request.fromDateTime != null &&
+  confirmedOtpExpiresAt(request.fromDateTime, request.timezoneOffsetMinutes ?? 0).getTime() <=
+    Date.now() &&
+  !request.session;
+
 const effectiveRequestStatus = (request: {
   status: RequestStatus;
   fromDateTime?: Date | null;
+  timezoneOffsetMinutes?: number | null;
   toDateTime?: Date | null;
   responseDeadlineAt?: Date | null;
   instantBooking?: boolean | null;
   session?: unknown | null;
+  quickPickGroupId?: string | null;
 }): RequestStatus => {
-  return shouldExpireRequest(request) ? RequestStatus.EXPIRED : request.status;
+  if (isConfirmedOtpGraceExpired(request)) return RequestStatus.EXPIRED;
+  if (shouldExpireRequest(request)) {
+    return request.quickPickGroupId && request.status === RequestStatus.PENDING
+      ? RequestStatus.CANCELLED
+      : RequestStatus.EXPIRED;
+  }
+  return request.status;
 };
 
 const requestHistoryFields = (
@@ -304,6 +379,7 @@ const requestHistoryFields = (
     createdAt: Date;
     updatedAt: Date;
     fromDateTime?: Date | null;
+    timezoneOffsetMinutes?: number | null;
     responseDeadlineAt?: Date | null;
     instantBooking?: boolean | null;
     cancelledAt?: Date | null;
@@ -345,7 +421,7 @@ const requestHistoryFields = (
     } else if (request.fromDateTime) {
       eventAt =
         request.status === RequestStatus.CONFIRMED
-          ? new Date(request.fromDateTime.getTime() + CONFIRMED_REQUEST_EXPIRY_WINDOW_MS)
+          ? confirmedOtpExpiresAt(request.fromDateTime, request.timezoneOffsetMinutes ?? 0)
           : request.fromDateTime;
     }
   }
@@ -562,6 +638,32 @@ const beneficiaryFields = (request: {
   beneficiaryNote: request.beneficiaryNote ?? null,
 });
 
+const quickChatSuggestions = (request: {
+  sender?: { profile: { aadhaarVerified: boolean } | null };
+  receiver?: { profile: { aadhaarVerified: boolean } | null };
+  needsMateVehicle: boolean;
+  neededMateVehicleTypes?: string[];
+  offersRequesterVehicle: boolean;
+  offeredRequesterVehicleType?: string | null;
+}): string[] => {
+  const suggestions: string[] = [];
+  if (
+    (request.sender !== undefined && request.sender.profile?.aadhaarVerified !== true) ||
+    (request.receiver !== undefined && request.receiver.profile?.aadhaarVerified !== true)
+  ) {
+    suggestions.push('Please verify your KYC.');
+  }
+  if (
+    request.needsMateVehicle ||
+    (request.neededMateVehicleTypes?.length ?? 0) > 0 ||
+    request.offersRequesterVehicle ||
+    request.offeredRequesterVehicleType != null
+  ) {
+    suggestions.push('Please bring your vehicle documents and driving licence.');
+  }
+  return suggestions;
+};
+
 const instantRequestFields = (request: {
   instantBooking?: boolean | null;
   responseDeadlineAt?: Date | null;
@@ -574,6 +676,38 @@ const normalizeOptionalText = (value?: string | null): string | null => {
   const normalized = value?.trim();
   return normalized ? normalized : null;
 };
+
+async function cancelOutgoingNormalRequests(
+  tx: Prisma.TransactionClient,
+  senderId: number,
+  quickPickRequestId: number,
+  now: Date,
+): Promise<Array<{ id: number; receiverId: number }>> {
+  await tx.request.updateMany({
+    where: {
+      senderId,
+      id: { not: quickPickRequestId },
+      quickPickGroupId: null,
+      status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+    },
+    data: {
+      status: RequestStatus.CANCELLED,
+      otp: null,
+      cancelledAt: now,
+      cancellationFeeReason: 'Auto Cancelled',
+    },
+  });
+  return tx.request.findMany({
+    where: {
+      senderId,
+      quickPickGroupId: null,
+      status: RequestStatus.CANCELLED,
+      cancelledAt: now,
+      cancellationFeeReason: 'Auto Cancelled',
+    },
+    select: { id: true, receiverId: true },
+  });
+}
 
 const cancellationPreviewFields = (_request: {
   status: RequestStatus;
@@ -710,23 +844,360 @@ const requestFitsAvailability = (
 };
 
 export class RequestService {
+  public static async createQuickPick(senderId: number, input: QuickPickInput) {
+    const now = new Date();
+    const { start, end } = localDayBounds(now, input.timezoneOffsetMinutes);
+    const bookingFor = input.bookingFor === 'someone_else' ? 'someone_else' : 'self';
+    const beneficiaryName = normalizeOptionalText(input.beneficiaryName);
+    if (bookingFor === 'someone_else' && !beneficiaryName) {
+      throw new AppError('Person name is required', 400);
+    }
+    const senderProfile = await prisma.profile.findUnique({ where: { userId: senderId } });
+    if (senderProfile?.readyNowEnabled) {
+      throw new AppError('Turn off Ready Now before sending a Ready Now request', 409);
+    }
+    if (bookingFor === 'someone_else') {
+      const confirmedCount = await prisma.request.count({
+        where: {
+          senderId,
+          bookingFor: 'someone_else',
+          status: RequestStatus.CONFIRMED,
+          fromDateTime: { gte: start, lt: end },
+        },
+      });
+      if (confirmedCount >= SOMEONE_ELSE_DAILY_BOOKING_LIMIT) {
+        throw new AppError(SOMEONE_ELSE_BOOKING_LIMIT_MESSAGE, 409);
+      }
+    }
+
+    const blocks = await prisma.block.findMany({
+      where: { OR: [{ blockerId: senderId }, { blockedId: senderId }] },
+      select: { blockerId: true, blockedId: true },
+    });
+    const blockedIds = blocks.map((block) =>
+      block.blockerId === senderId ? block.blockedId : block.blockerId,
+    );
+    const profiles = await prisma.profile.findMany({
+      where: {
+        userId: { notIn: [senderId, ...blockedIds] },
+        instantAvailable: true,
+        readyNowEnabled: true,
+        instantAvailableUntil: { gt: now },
+        isMinor: false,
+        user: { isActive: true },
+      },
+      select: { userId: true, latitude: true, longitude: true, categories: true },
+    });
+    const nearbyIds = profiles
+      .filter(
+        (profile) =>
+          profileMatchesCategory(profile.categories, input.category) &&
+          profile.latitude != null &&
+          profile.longitude != null &&
+          distanceBetweenKm(input.latitude, input.longitude, profile.latitude, profile.longitude) <=
+            50,
+      )
+      .map((profile) => profile.userId);
+
+    const activeSelfBooking = await prisma.request.findFirst({
+      where: {
+        OR: [{ senderId }, { receiverId: senderId }],
+        status: RequestStatus.CONFIRMED,
+        AND: [activeSessionFilter],
+      },
+      select: { id: true },
+    });
+    if (bookingFor === 'self' && activeSelfBooking) {
+      throw new AppError('Book for Someone Else while your support is confirmed or running.', 409);
+    }
+    const scheduledMeetings = await prisma.request.findMany({
+      where: {
+        instantBooking: false,
+        status: RequestStatus.CONFIRMED,
+        fromDateTime: { gte: start, lt: end },
+        AND: [dateBlockingSessionFilter],
+        OR: [
+          { senderId: { in: [senderId, ...nearbyIds] } },
+          { receiverId: { in: [senderId, ...nearbyIds] } },
+        ],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    const bookedIds = new Set(
+      scheduledMeetings.flatMap((meeting) => [meeting.senderId, meeting.receiverId]),
+    );
+    if (bookingFor === 'self' && bookedIds.has(senderId)) {
+      throw new AppError('Ready Now is unavailable on a date with a scheduled meet', 409);
+    }
+
+    const existing = nearbyIds.length
+      ? await prisma.request.findMany({
+          where: {
+            senderId,
+            receiverId: { in: nearbyIds },
+            status: {
+              in: [
+                RequestStatus.PENDING,
+                RequestStatus.ACCEPTED_BY_RECEIVER,
+                RequestStatus.CONFIRMED,
+              ],
+            },
+            AND: [activeSessionFilter],
+          },
+          select: { receiverId: true },
+        })
+      : [];
+    const busyIds = new Set(existing.map((request) => request.receiverId));
+    const eligibleIds = nearbyIds.filter((id) => !busyIds.has(id) && !bookedIds.has(id));
+    if (!eligibleIds.length) {
+      throw new AppError('No supporter found within 50 km of your selected location.', 404);
+    }
+
+    const groupId = randomUUID();
+    const responseDeadlineAt = new Date(now.getTime() + input.responseTime * 60_000);
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(${senderId})::text AS lock_result`,
+      );
+      const activeQuickPick = await tx.request.findFirst({
+        where: {
+          senderId,
+          quickPickGroupId: { not: null },
+          status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+          responseDeadlineAt: { gt: now },
+        },
+        select: { id: true },
+      });
+      if (activeQuickPick) {
+        throw new AppError('A Quick Pick request is already active', 409);
+      }
+      if (bookingFor === 'someone_else') {
+        const confirmedCount = await tx.request.count({
+          where: {
+            senderId,
+            bookingFor: 'someone_else',
+            status: RequestStatus.CONFIRMED,
+            fromDateTime: { gte: start, lt: end },
+          },
+        });
+        if (confirmedCount >= SOMEONE_ELSE_DAILY_BOOKING_LIMIT) {
+          throw new AppError(SOMEONE_ELSE_BOOKING_LIMIT_MESSAGE, 409);
+        }
+      } else {
+        const currentSupport = await tx.request.findFirst({
+          where: {
+            OR: [{ senderId }, { receiverId: senderId }],
+            status: RequestStatus.CONFIRMED,
+            AND: [activeSessionFilter],
+          },
+          select: { id: true },
+        });
+        if (currentSupport) {
+          throw new AppError('Book for Someone Else while your support is confirmed or running.', 409);
+        }
+      }
+      await tx.request.createMany({
+        data: eligibleIds.map((receiverId) => ({
+          senderId,
+          receiverId,
+          categoryId: input.category,
+          categoryLabel: input.category,
+          meetLocation: input.meetLocation,
+          meetLocationLatitude: input.latitude,
+          meetLocationLongitude: input.longitude,
+          fromDateTime: now,
+          toDateTime: new Date(now.getTime() + input.durationMinutes * 60_000),
+          timezoneOffsetMinutes: input.timezoneOffsetMinutes,
+          instantBooking: true,
+          quickPickGroupId: groupId,
+          responseDeadlineAt,
+          quotedHourlyRate: input.hourlyRate,
+          bookingFor,
+          beneficiaryName: bookingFor === 'someone_else' ? beneficiaryName : null,
+          beneficiaryPhone:
+            bookingFor === 'someone_else' ? normalizeOptionalText(input.beneficiaryPhone) : null,
+          beneficiaryRelation:
+            bookingFor === 'someone_else' ? normalizeOptionalText(input.beneficiaryRelation) : null,
+          beneficiaryNote:
+            bookingFor === 'someone_else' ? normalizeOptionalText(input.beneficiaryNote) : null,
+          message: normalizeOptionalText(input.message) ?? '',
+          readyToPayTravelCharges: input.readyToPayTravelCharges ?? false,
+          readyToPayTip: input.readyToPayTip ?? false,
+          extraSupportAmount: input.readyToPayTip ? input.extraSupportAmount ?? null : null,
+          needsMateVehicle: (input.neededMateVehicleTypes?.length ?? 0) > 0,
+          offersRequesterVehicle: input.offeredRequesterVehicleType != null,
+          neededMateVehicleTypes: input.neededMateVehicleTypes ?? [],
+          offeredRequesterVehicleType: input.offeredRequesterVehicleType ?? null,
+          status: RequestStatus.PENDING,
+        })),
+      });
+    });
+    scheduleReadyNowExpiration(responseDeadlineAt);
+    const created = await prisma.request.findMany({
+      where: { quickPickGroupId: groupId },
+      select: { id: true, receiverId: true },
+    });
+    for (const request of created) {
+      sendGlobalToUser(request.receiverId, { event: 'request_created', requestId: request.id });
+      void NotificationService.createNotification(
+        request.receiverId,
+        'new_request',
+        `Quick Pick request at Rs ${input.hourlyRate}/hr. Please respond within ${input.responseTime} minutes.`,
+        senderId,
+      ).catch((error) => console.error('Quick Pick notification failed:', error));
+    }
+    sendGlobalToUser(senderId, { event: 'request_updated' });
+    return {
+      groupId,
+      responseDeadlineAt: responseDeadlineAt.toISOString(),
+      supporterCount: created.length,
+    };
+  }
+
+  public static async getQuickPickStatus(senderId: number, groupId: string) {
+    const requests = await prisma.request.findMany({
+      where: { quickPickGroupId: groupId, senderId },
+      include: { receiver: { include: { profile: true } } },
+      orderBy: { id: 'asc' },
+    });
+    if (!requests.length) throw new AppError('Quick Pick request not found', 404);
+    const accepted = requests.find(
+      (request) => request.status === RequestStatus.ACCEPTED_BY_RECEIVER,
+    );
+    const confirmed = requests.find((request) => request.status === RequestStatus.CONFIRMED);
+    const winner = accepted ?? confirmed;
+    return {
+      state: winner
+        ? accepted
+          ? 'accepted'
+          : 'confirmed'
+        : requests.some(
+              (request) =>
+                request.status === RequestStatus.CANCELLED &&
+                request.cancellationFeeReason !== 'Response time elapsed',
+            ) &&
+            requests.every((request) => request.status !== RequestStatus.PENDING)
+          ? 'cancelled'
+          : requests[0].responseDeadlineAt != null &&
+              requests[0].responseDeadlineAt > new Date()
+            ? 'waiting'
+            : 'timed_out',
+      responseDeadlineAt: requests[0].responseDeadlineAt?.toISOString() ?? null,
+      responseTimeMinutes: requests[0].responseDeadlineAt && requests[0].createdAt
+        ? Math.round(
+            (requests[0].responseDeadlineAt.getTime() - requests[0].createdAt.getTime()) /
+              60_000,
+          )
+        : null,
+      supporter: winner
+        ? {
+            requestId: winner.id,
+            name: winner.receiver.profile?.fullName ?? winner.receiver.name ?? 'Supporter',
+            avatar: getProfileAvatar(winner.receiver.profile),
+            tenureId: winner.receiver.tenureId,
+            category: winner.categoryLabel,
+            meetLocation: winner.meetLocation,
+            hourlyRate: winner.quotedHourlyRate,
+            durationMinutes: winner.toDateTime
+              ? Math.round((winner.toDateTime.getTime() - winner.fromDateTime.getTime()) / 60_000)
+              : null,
+          }
+        : null,
+    };
+  }
+
+  public static async cancelQuickPick(senderId: number, groupId: string): Promise<void> {
+    const requests = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(${senderId})::text AS lock_result`,
+      );
+      const requests = await tx.request.findMany({
+        where: { quickPickGroupId: groupId, senderId },
+        select: { id: true, receiverId: true, status: true },
+      });
+      if (!requests.length) throw new AppError('Quick Pick request not found', 404);
+      if (requests.some((request) => request.status === RequestStatus.CONFIRMED)) {
+        throw new AppError('Cancel the confirmed request from chat instead.', 409);
+      }
+      await tx.request.updateMany({
+        where: {
+          quickPickGroupId: groupId,
+          senderId,
+          status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+        },
+        data: {
+          status: RequestStatus.CANCELLED,
+          cancelledAt: new Date(),
+          cancelledById: senderId,
+          otp: null,
+        },
+      });
+      return requests;
+    });
+    for (const request of requests) {
+      sendGlobalToUser(request.receiverId, { event: 'request_updated', requestId: request.id });
+    }
+    sendGlobalToUser(senderId, { event: 'request_updated' });
+  }
+
   private static async persistExpiredRequests(
     requests: Array<{
       id: number;
       status: RequestStatus;
       fromDateTime?: Date | null;
+      timezoneOffsetMinutes?: number | null;
       toDateTime?: Date | null;
       responseDeadlineAt?: Date | null;
       instantBooking?: boolean | null;
       session?: unknown | null;
+      quickPickGroupId?: string | null;
     }>,
   ): Promise<void> {
-    const expiredIds = requests.filter(shouldExpireRequest).map((request) => request.id);
+    const confirmedGraceExpiredIds = requests
+      .filter(isConfirmedOtpGraceExpired)
+      .map((request) => request.id);
+    const overdue = requests.filter(
+      (request) => !isConfirmedOtpGraceExpired(request) && shouldExpireRequest(request),
+    );
+    const cancelledQuickPickIds = overdue
+      .filter((request) => request.quickPickGroupId && request.status === RequestStatus.PENDING)
+      .map((request) => request.id);
+    const expiredIds = overdue
+      .filter((request) => !request.quickPickGroupId || request.status !== RequestStatus.PENDING)
+      .map((request) => request.id);
 
-    if (!expiredIds.length) {
+    if (!expiredIds.length && !confirmedGraceExpiredIds.length && !cancelledQuickPickIds.length) {
       return;
     }
 
+    if (confirmedGraceExpiredIds.length) {
+      await prisma.request.updateMany({
+        where: {
+          id: { in: confirmedGraceExpiredIds },
+          status: RequestStatus.CONFIRMED,
+          session: null,
+        },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+          cancellationFeeReason: 'OTP was not entered on the scheduled support date.',
+        },
+      });
+    }
+
+    if (cancelledQuickPickIds.length) {
+      await prisma.request.updateMany({
+        where: { id: { in: cancelledQuickPickIds }, status: RequestStatus.PENDING },
+        data: {
+          status: RequestStatus.CANCELLED,
+          cancelledAt: new Date(),
+          cancellationFeeReason: 'Response time elapsed',
+          otp: null,
+        },
+      });
+    }
+
+    if (!expiredIds.length) return;
     await prisma.request.updateMany({
       where: { id: { in: expiredIds } },
       data: {
@@ -741,7 +1212,53 @@ export class RequestService {
     receiverId: number,
   ): Promise<void> {
     const now = new Date();
-    const confirmedExpiryCutoff = new Date(now.getTime() - CONFIRMED_REQUEST_EXPIRY_WINDOW_MS);
+    const confirmedRequests =
+      (await prisma.request.findMany({
+        where: {
+          senderId,
+          receiverId,
+          status: RequestStatus.CONFIRMED,
+          session: null,
+        },
+        select: { id: true, fromDateTime: true, timezoneOffsetMinutes: true },
+      })) ?? [];
+    const confirmedExpiredIds = confirmedRequests
+      .filter(
+        (request) =>
+          confirmedOtpExpiresAt(request.fromDateTime, request.timezoneOffsetMinutes).getTime() <=
+          now.getTime(),
+      )
+      .map((request) => request.id);
+
+    if (confirmedExpiredIds.length)
+      await prisma.request.updateMany({
+        where: {
+          id: { in: confirmedExpiredIds },
+          status: RequestStatus.CONFIRMED,
+          session: null,
+        },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+          cancellationFeeReason: 'OTP was not entered on the scheduled support date.',
+        },
+      });
+
+    await prisma.request.updateMany({
+      where: {
+        senderId,
+        receiverId,
+        quickPickGroupId: { not: null },
+        status: RequestStatus.PENDING,
+        responseDeadlineAt: { lte: now },
+      },
+      data: {
+        status: RequestStatus.CANCELLED,
+        cancelledAt: now,
+        cancellationFeeReason: 'Response time elapsed',
+        otp: null,
+      },
+    });
 
     await prisma.request.updateMany({
       where: {
@@ -751,17 +1268,13 @@ export class RequestService {
         OR: [
           {
             status: RequestStatus.PENDING,
+            quickPickGroupId: null,
             responseDeadlineAt: { lte: now },
           },
           {
             status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
             instantBooking: false,
             fromDateTime: { lte: now },
-          },
-          {
-            status: RequestStatus.CONFIRMED,
-            fromDateTime: { lte: confirmedExpiryCutoff },
-            session: null,
           },
         ],
       },
@@ -817,6 +1330,24 @@ export class RequestService {
 
     await RequestService.expireStaleRequestsForUsers(senderId, data.receiverId);
 
+    const instantBooking = Boolean(data.instantBooking);
+    const timezoneOffsetMinutes = data.timezoneOffsetMinutes ?? 0;
+    const selectedDay = localDayBounds(data.fromDateTime, timezoneOffsetMinutes);
+
+    if (instantBooking && data.bookingFor !== 'someone_else') {
+      const activeSupport = await prisma.request.findFirst({
+        where: {
+          OR: [{ senderId }, { receiverId: senderId }],
+          status: RequestStatus.CONFIRMED,
+          AND: [activeSessionFilter],
+        },
+        select: { id: true },
+      });
+      if (activeSupport) {
+        throw new AppError('Book for Someone Else while your support is confirmed or running.', 409);
+      }
+    }
+
     const existingActiveRequest = await prisma.request.findFirst({
       where: {
         senderId,
@@ -832,6 +1363,9 @@ export class RequestService {
               },
               {
                 status: RequestStatus.CONFIRMED,
+                ...(!instantBooking
+                  ? { fromDateTime: { gte: selectedDay.start, lt: selectedDay.end } }
+                  : {}),
                 OR: [{ toDateTime: null }, { toDateTime: { gt: new Date() } }],
               },
             ],
@@ -845,9 +1379,24 @@ export class RequestService {
       throw new AppError('You have already sent a request to this user', 409);
     }
 
-    const instantBooking = Boolean(data.instantBooking);
+    if (data.bookingFor === 'someone_else') {
+      const { start, end } = localDayBounds(
+        data.fromDateTime,
+        data.timezoneOffsetMinutes ?? 0,
+      );
+      const confirmedCount = await prisma.request.count({
+        where: {
+          senderId,
+          bookingFor: 'someone_else',
+          status: RequestStatus.CONFIRMED,
+          fromDateTime: { gte: start, lt: end },
+        },
+      });
+      if (confirmedCount >= SOMEONE_ELSE_DAILY_BOOKING_LIMIT) {
+        throw new AppError(SOMEONE_ELSE_BOOKING_LIMIT_MESSAGE, 409);
+      }
+    }
 
-    const timezoneOffsetMinutes = data.timezoneOffsetMinutes ?? 0;
     const [senderMeetings, receiverMeetings] = await Promise.all([
       scheduledRequestsForUserOnDate(senderId, data.fromDateTime, timezoneOffsetMinutes),
       scheduledRequestsForUserOnDate(data.receiverId, data.fromDateTime, timezoneOffsetMinutes),
@@ -855,13 +1404,15 @@ export class RequestService {
 
     if (!instantBooking) {
       if (
-        hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes) ||
+        (data.bookingFor !== 'someone_else' &&
+          hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes)) ||
         hasMeetOnDate(receiverMeetings, data.fromDateTime, timezoneOffsetMinutes)
       ) {
         throw new AppError('This date is fully booked by a confirmed scheduled meet', 409);
       }
     } else if (
-      hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes) ||
+      (data.bookingFor !== 'someone_else' &&
+        hasMeetOnDate(senderMeetings, data.fromDateTime, timezoneOffsetMinutes)) ||
       hasMeetOnDate(receiverMeetings, data.fromDateTime, timezoneOffsetMinutes)
     ) {
       throw new AppError('Ready Now is unavailable on a date with a scheduled meet', 409);
@@ -955,8 +1506,13 @@ export class RequestService {
         ...beneficiaryData,
         readyToPayTravelCharges: data.readyToPayTravelCharges ?? false,
         readyToPayTip: data.readyToPayTip ?? false,
-        needsMateVehicle: data.needsMateVehicle ?? false,
-        offersRequesterVehicle: data.offersRequesterVehicle ?? false,
+        extraSupportAmount: data.readyToPayTip ? (data.extraSupportAmount ?? null) : null,
+        needsMateVehicle:
+          (data.neededMateVehicleTypes?.length ?? 0) > 0 || (data.needsMateVehicle ?? false),
+        offersRequesterVehicle:
+          data.offeredRequesterVehicleType != null || (data.offersRequesterVehicle ?? false),
+        neededMateVehicleTypes: data.neededMateVehicleTypes ?? [],
+        offeredRequesterVehicleType: data.offeredRequesterVehicleType ?? null,
         quotedHourlyRate: fixedHourlyRate,
         status: RequestStatus.PENDING,
       },
@@ -984,8 +1540,11 @@ export class RequestService {
       ...beneficiaryFields(newRequest),
       readyToPayTravelCharges: newRequest.readyToPayTravelCharges,
       readyToPayTip: newRequest.readyToPayTip,
+      extraSupportAmount: newRequest.extraSupportAmount,
       needsMateVehicle: newRequest.needsMateVehicle,
       offersRequesterVehicle: newRequest.offersRequesterVehicle,
+      neededMateVehicleTypes: newRequest.neededMateVehicleTypes,
+      offeredRequesterVehicleType: newRequest.offeredRequesterVehicleType,
       requestHourlyRate: newRequest.quotedHourlyRate,
       ...profileFields(receiver),
       status: 'pending' as const,
@@ -994,6 +1553,7 @@ export class RequestService {
       requesterGender: null,
       ...cancellationFields(newRequest),
       ...cancellationPreviewFields(newRequest),
+      quickChatSuggestions: [],
     };
 
     try {
@@ -1028,6 +1588,9 @@ export class RequestService {
       prisma.request.findMany({
         where: { senderId: userId },
         include: {
+          sender: {
+            include: { profile: true },
+          },
           receiver: {
             include: { profile: true },
           },
@@ -1082,12 +1645,16 @@ export class RequestService {
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
         ...instantRequestFields(req),
+        quickPickGroupId: req.quickPickGroupId,
         message: req.message ?? '',
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        extraSupportAmount: req.extraSupportAmount,
         needsMateVehicle: req.needsMateVehicle,
         offersRequesterVehicle: req.offersRequesterVehicle,
+        neededMateVehicleTypes: req.neededMateVehicleTypes,
+        offeredRequesterVehicleType: req.offeredRequesterVehicleType,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
@@ -1096,10 +1663,12 @@ export class RequestService {
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
-        otp: null,
+        // The request sender (beneficiary) owns and shares the OTP.
+        otp: req.otp,
         requesterGender: null,
         ...cancellationFields(req),
         ...cancellationPreviewFields({ ...req, status: effectiveRequestStatus(req) }),
+        quickChatSuggestions: quickChatSuggestions(req),
       }),
     );
 
@@ -1119,12 +1688,16 @@ export class RequestService {
         fromDateTime: req.fromDateTime.toISOString(),
         toDateTime: req.toDateTime?.toISOString() ?? null,
         ...instantRequestFields(req),
+        quickPickGroupId: req.quickPickGroupId,
         message: req.message ?? '',
         ...beneficiaryFields(req),
         readyToPayTravelCharges: req.readyToPayTravelCharges,
         readyToPayTip: req.readyToPayTip,
+        extraSupportAmount: req.extraSupportAmount,
         needsMateVehicle: req.needsMateVehicle,
         offersRequesterVehicle: req.offersRequesterVehicle,
+        neededMateVehicleTypes: req.neededMateVehicleTypes,
+        offeredRequesterVehicleType: req.offeredRequesterVehicleType,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
@@ -1133,10 +1706,13 @@ export class RequestService {
         sessionStatus: mapSessionStatus(req.session),
         sessionEndedAt: req.session?.endedAt?.toISOString() ?? null,
         sessionElapsedSec: req.session?.totalElapsedSeconds ?? null,
-        otp: req.otp,
+        // The supporter must never receive the OTP through the API; they
+        // receive only the prompt to enter the code shared by the sender.
+        otp: null,
         requesterGender: req.sender.profile?.gender ?? null,
         ...cancellationFields(req),
         ...cancellationPreviewFields({ ...req, status: effectiveRequestStatus(req) }),
+        quickChatSuggestions: quickChatSuggestions(req),
       }),
     );
 
@@ -1165,10 +1741,14 @@ export class RequestService {
     if (shouldExpireRequest(request)) {
       await prisma.request.update({
         where: { id: requestId },
-        data: {
-          status: RequestStatus.EXPIRED,
-          otp: null,
-        },
+        data: request.quickPickGroupId && request.status === RequestStatus.PENDING
+          ? {
+              status: RequestStatus.CANCELLED,
+              cancelledAt: new Date(),
+              cancellationFeeReason: 'Response time elapsed',
+              otp: null,
+            }
+          : { status: RequestStatus.EXPIRED, otp: null },
       });
       if (request.status === RequestStatus.CONFIRMED) {
         await restoreReadyNow([request.senderId, request.receiverId]);
@@ -1192,6 +1772,13 @@ export class RequestService {
       }
       if (request.status === RequestStatus.CONFIRMED && !cancellationReason?.trim()) {
         throw new AppError('A cancellation reason is required for a confirmed meet', 400);
+      }
+      if (
+        request.status === RequestStatus.CONFIRMED &&
+        !request.instantBooking &&
+        request.fromDateTime <= new Date()
+      ) {
+        throw new AppError('A confirmed support cannot be cancelled after its scheduled time', 400);
       }
     } else {
       if (status === 'declined') {
@@ -1224,7 +1811,8 @@ export class RequestService {
               ),
             ]);
             if (
-              hasMeetOnDate(senderMeetings, request.fromDateTime, timezoneOffsetMinutes) ||
+              (request.bookingFor !== 'someone_else' &&
+                hasMeetOnDate(senderMeetings, request.fromDateTime, timezoneOffsetMinutes)) ||
               hasMeetOnDate(receiverMeetings, request.fromDateTime, timezoneOffsetMinutes)
             ) {
               throw new AppError('This date is fully booked by a confirmed scheduled meet', 409);
@@ -1292,121 +1880,262 @@ export class RequestService {
       receiver: { include: { profile: true } },
     } as const;
 
-    const updatedRequest = finalConfirmation
-      ? await prisma.$transaction(
-          async (tx) => {
-            for (const participantId of [request.senderId, request.receiverId].sort(
-              (left, right) => left - right,
-            )) {
-              await tx.$queryRaw(
-                Prisma.sql`SELECT pg_advisory_xact_lock(${participantId})::text AS lock_result`,
-              );
-            }
-
+    let autoCancelledNormalRequests: Array<{ id: number; receiverId: number }> = [];
+    const updatedRequest =
+      status === 'confirmed' && request.status === RequestStatus.PENDING && request.quickPickGroupId
+        ? await prisma.$transaction(async (tx) => {
+            await tx.$queryRaw(
+              Prisma.sql`SELECT pg_advisory_xact_lock(${request.senderId})::text AS lock_result`,
+            );
             const current = await tx.request.findUnique({
               where: { id: requestId },
-              select: { status: true },
+              select: { status: true, responseDeadlineAt: true },
             });
-            if (current?.status !== RequestStatus.ACCEPTED_BY_RECEIVER) {
-              throw new AppError('Another request was confirmed first', 409);
+            if (
+              current?.status !== RequestStatus.PENDING ||
+              !current.responseDeadlineAt ||
+              current.responseDeadlineAt <= new Date()
+            ) {
+              throw new AppError('This Quick Pick request is no longer available', 409);
             }
-
-            const timezoneOffsetMinutes = request.timezoneOffsetMinutes ?? 0;
-            const { start, end } = localDayBounds(request.fromDateTime, timezoneOffsetMinutes);
-            const conflictingMeeting = await tx.request.findFirst({
+            const groupWinner = await tx.request.findFirst({
               where: {
-                id: { not: requestId },
-                status: RequestStatus.CONFIRMED,
-                fromDateTime: { gte: start, lt: end },
-                OR: [
-                  { senderId: { in: [request.senderId, request.receiverId] } },
-                  { receiverId: { in: [request.senderId, request.receiverId] } },
-                ],
-                AND: [
-                  activeSessionFilter,
-                  {
-                    OR: [{ toDateTime: null }, { toDateTime: { gt: now } }],
-                  },
-                ],
+                quickPickGroupId: request.quickPickGroupId,
+                status: { in: [RequestStatus.ACCEPTED_BY_RECEIVER, RequestStatus.CONFIRMED] },
               },
               select: { id: true },
             });
-            if (conflictingMeeting) {
-              throw new AppError('Another request was confirmed first', 409);
-            }
-
+            if (groupWinner) throw new AppError('Another supporter accepted this Quick Pick', 409);
             const winner = await tx.request.update({
               where: { id: requestId },
               data: updateData,
               include: updateInclude,
             });
-            const sameDateAlternatives = {
-              id: { not: requestId },
-              fromDateTime: { gte: start, lt: end },
-              session: null,
-            } as const;
-
             await tx.request.updateMany({
               where: {
-                ...sameDateAlternatives,
-                OR: [
-                  { senderId: request.senderId },
-                  {
-                    senderId: request.receiverId,
-                    receiverId: request.senderId,
-                  },
-                ],
-                status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
-              },
-              data: {
-                status: RequestStatus.CANCELLED,
-                otp: null,
-                cancelledAt: now,
-                cancellationFeeReason: 'Auto Cancelled',
-              },
-            });
-            await tx.request.updateMany({
-              where: {
-                ...sameDateAlternatives,
-                receiverId: request.receiverId,
-                senderId: { not: request.senderId },
-                status: RequestStatus.ACCEPTED_BY_RECEIVER,
-              },
-              data: {
-                status: RequestStatus.CANCELLED,
-                otp: null,
-                cancelledAt: now,
-                cancellationFeeReason: 'Late Response',
-              },
-            });
-            await tx.request.updateMany({
-              where: {
-                ...sameDateAlternatives,
-                receiverId: request.receiverId,
-                senderId: { not: request.senderId },
+                quickPickGroupId: request.quickPickGroupId,
+                id: { not: requestId },
                 status: RequestStatus.PENDING,
               },
-              data: {
-                status: RequestStatus.CANCELLED,
-                otp: null,
-                cancelledAt: now,
-                cancellationFeeReason: 'Auto Cancelled',
-              },
+              data: { status: RequestStatus.EXPIRED, otp: null },
             });
+            autoCancelledNormalRequests = await cancelOutgoingNormalRequests(
+              tx,
+              request.senderId,
+              requestId,
+              now,
+            );
             return winner;
-          },
-          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-        )
-      : await prisma.request.update({
-          where: { id: requestId },
-          data: updateData,
-          include: updateInclude,
+          })
+        : finalConfirmation
+          ? await prisma.$transaction(
+              async (tx) => {
+                for (const participantId of [request.senderId, request.receiverId].sort(
+                  (left, right) => left - right,
+                )) {
+                  await tx.$queryRaw(
+                    Prisma.sql`SELECT pg_advisory_xact_lock(${participantId})::text AS lock_result`,
+                  );
+                }
+
+                const current = await tx.request.findUnique({
+                  where: { id: requestId },
+                  select: { status: true },
+                });
+                if (current?.status !== RequestStatus.ACCEPTED_BY_RECEIVER) {
+                  throw new AppError('Another request was confirmed first', 409);
+                }
+
+                const timezoneOffsetMinutes = request.timezoneOffsetMinutes ?? 0;
+                const { start, end } = localDayBounds(request.fromDateTime, timezoneOffsetMinutes);
+                if (request.bookingFor === 'someone_else') {
+                  const confirmedCount = await tx.request.count({
+                    where: {
+                      senderId: request.senderId,
+                      bookingFor: 'someone_else',
+                      status: RequestStatus.CONFIRMED,
+                      fromDateTime: { gte: start, lt: end },
+                    },
+                  });
+                  if (confirmedCount >= SOMEONE_ELSE_DAILY_BOOKING_LIMIT) {
+                    throw new AppError(SOMEONE_ELSE_BOOKING_LIMIT_MESSAGE, 409);
+                  }
+                } else if (request.instantBooking) {
+                  const activeSupport = await tx.request.findFirst({
+                    where: {
+                      id: { not: requestId },
+                      OR: [
+                        { senderId: request.senderId },
+                        { receiverId: request.senderId },
+                      ],
+                      status: RequestStatus.CONFIRMED,
+                      AND: [activeSessionFilter],
+                    },
+                    select: { id: true },
+                  });
+                  if (activeSupport) {
+                    throw new AppError(
+                      'Book for Someone Else while your support is confirmed or running.',
+                      409,
+                    );
+                  }
+                }
+                const conflictingMeeting = await tx.request.findFirst({
+                  where: {
+                    id: { not: requestId },
+                    status: RequestStatus.CONFIRMED,
+                    fromDateTime: { gte: start, lt: end },
+                    OR: [
+                      { senderId: request.receiverId },
+                      { receiverId: request.receiverId },
+                      ...(request.bookingFor === 'someone_else'
+                        ? []
+                        : [
+                            { senderId: request.senderId },
+                            { receiverId: request.senderId },
+                          ]),
+                    ],
+                    AND: [
+                      activeSessionFilter,
+                      {
+                        OR: [{ toDateTime: null }, { toDateTime: { gt: now } }],
+                      },
+                    ],
+                  },
+                  select: { id: true },
+                });
+                if (conflictingMeeting) {
+                  throw new AppError('Another request was confirmed first', 409);
+                }
+
+                const winner = await tx.request.update({
+                  where: { id: requestId },
+                  data: updateData,
+                  include: updateInclude,
+                });
+                if (request.quickPickGroupId) {
+                  autoCancelledNormalRequests = await cancelOutgoingNormalRequests(
+                    tx,
+                    request.senderId,
+                    requestId,
+                    now,
+                  );
+                }
+                const sameDateAlternatives = {
+                  id: { not: requestId },
+                  fromDateTime: { gte: start, lt: end },
+                  session: null,
+                } as const;
+
+                await tx.request.updateMany({
+                  where: {
+                    ...sameDateAlternatives,
+                    OR:
+                      request.bookingFor === 'someone_else'
+                        ? [
+                            {
+                              senderId: request.receiverId,
+                              receiverId: request.senderId,
+                            },
+                          ]
+                        : [
+                            { senderId: request.senderId },
+                            {
+                              senderId: request.receiverId,
+                              receiverId: request.senderId,
+                            },
+                          ],
+                    status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+                  },
+                  data: {
+                    status: RequestStatus.CANCELLED,
+                    otp: null,
+                    cancelledAt: now,
+                    cancellationFeeReason: 'Auto Cancelled',
+                  },
+                });
+                await tx.request.updateMany({
+                  where: {
+                    ...sameDateAlternatives,
+                    receiverId: request.receiverId,
+                    senderId: { not: request.senderId },
+                    status: RequestStatus.ACCEPTED_BY_RECEIVER,
+                  },
+                  data: {
+                    status: RequestStatus.CANCELLED,
+                    otp: null,
+                    cancelledAt: now,
+                    cancellationFeeReason: 'Late Response',
+                  },
+                });
+                await tx.request.updateMany({
+                  where: {
+                    ...sameDateAlternatives,
+                    receiverId: request.receiverId,
+                    senderId: { not: request.senderId },
+                    status: RequestStatus.PENDING,
+                  },
+                  data: {
+                    status: RequestStatus.CANCELLED,
+                    otp: null,
+                    cancelledAt: now,
+                    cancellationFeeReason: 'Auto Cancelled',
+                  },
+                });
+                return winner;
+              },
+              { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+            )
+          : await prisma.request.update({
+              where: { id: requestId },
+              data: updateData,
+              include: updateInclude,
+            });
+
+    if (autoCancelledNormalRequests.length) {
+      sendGlobalToUser(request.senderId, { event: 'request_updated' });
+      for (const receiverId of new Set(
+        autoCancelledNormalRequests.map((item) => item.receiverId),
+      )) {
+        sendGlobalToUser(receiverId, { event: 'request_updated' });
+      }
+      for (const cancelled of autoCancelledNormalRequests) {
+        for (const participantId of [request.senderId, cancelled.receiverId]) {
+          sendToUserForRequest(participantId, cancelled.id, {
+            event: 'request_cancelled',
+            requestId: cancelled.id,
+          });
+        }
+      }
+    }
+
+    if (
+      request.quickPickGroupId &&
+      status === 'confirmed' &&
+      request.status === RequestStatus.PENDING
+    ) {
+      const alternatives = await prisma.request.findMany({
+        where: { quickPickGroupId: request.quickPickGroupId, id: { not: requestId } },
+        select: { id: true, receiverId: true },
+      });
+      for (const alternative of alternatives) {
+        sendGlobalToUser(alternative.receiverId, {
+          event: 'request_updated',
+          requestId: alternative.id,
         });
+      }
+    }
 
     if (finalConfirmation && updatedRequest.instantBooking) {
       await suspendReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
     } else if (status === 'cancelled' && request.status === RequestStatus.CONFIRMED) {
       await restoreReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
+    }
+    if (finalConfirmation) {
+      scheduleConfirmedOtpExpiry(updatedRequest.fromDateTime, updatedRequest.timezoneOffsetMinutes);
+      if (!updatedRequest.instantBooking) {
+        scheduleScheduledSessionReminder(updatedRequest.fromDateTime);
+      }
     }
 
     const isSender = updatedRequest.senderId === userId;
@@ -1476,13 +2205,18 @@ export class RequestService {
       ...beneficiaryFields(updatedRequest),
       readyToPayTravelCharges: updatedRequest.readyToPayTravelCharges,
       readyToPayTip: updatedRequest.readyToPayTip,
+      extraSupportAmount: updatedRequest.extraSupportAmount,
       needsMateVehicle: updatedRequest.needsMateVehicle,
       offersRequesterVehicle: updatedRequest.offersRequesterVehicle,
+      neededMateVehicleTypes: updatedRequest.neededMateVehicleTypes,
+      offeredRequesterVehicleType: updatedRequest.offeredRequesterVehicleType,
       requestHourlyRate: updatedRequest.quotedHourlyRate,
       ...profileFields(partner),
       status: mapStatusToFrontend(updatedRequest.status),
       sentAt: formatSentAt(updatedRequest.createdAt),
-      otp: isSender ? null : updatedRequest.otp,
+      // The request sender is the beneficiary and is the sole holder of the
+      // OTP. The receiver/supporter enters it to start the session.
+      otp: isSender ? updatedRequest.otp : null,
       ...(otpProximity != null
         ? {
             otpProximityReady: otpProximity.ready,
@@ -1493,6 +2227,7 @@ export class RequestService {
       requesterGender: updatedRequest.sender.profile?.gender ?? null,
       ...cancellationFields(updatedRequest),
       ...cancellationPreviewFields(updatedRequest),
+      quickChatSuggestions: quickChatSuggestions(updatedRequest),
     };
 
     const partnerRequest = {
@@ -1506,7 +2241,7 @@ export class RequestService {
       mateAvatar: getProfileAvatar(
         isSender ? updatedRequest.sender.profile : updatedRequest.receiver.profile,
       ),
-      otp: partner.id === updatedRequest.receiverId ? updatedRequest.otp : null,
+      otp: partner.id === updatedRequest.senderId ? updatedRequest.otp : null,
       requesterGender: updatedRequest.sender.profile?.gender ?? null,
     };
 
@@ -1587,12 +2322,14 @@ export class RequestService {
       type: msg.type,
       text: msg.isDeleted
         ? 'This message was deleted'
-        : msg.type === 'text'
+        : msg.type === 'text' || msg.type === 'system'
           ? msg.content
           : undefined,
       imageUri: msg.type === 'image' ? (msg.mediaUrl ?? msg.content) : undefined,
       voiceUri: msg.type === 'voice' ? (msg.mediaUrl ?? msg.content) : undefined,
       voiceDurationSec: msg.voiceDuration ?? undefined,
+      viewOnce: msg.viewOnce,
+      expiresAt: msg.expiresAt.getTime(),
       createdAt: msg.createdAt.getTime(),
       isDeleted: msg.isDeleted,
     }));

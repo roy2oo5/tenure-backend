@@ -99,6 +99,9 @@ model Profile {
   facebook               String?
   youtube                String?
   website                String?
+  contactEmail           String?   @map("contact_email")
+  whatsappUsername       String?   @map("whatsapp_username")
+  whatsappNumber         String?   @map("whatsapp_number")
   instantAvailable       Boolean   @default(false) @map("instant_available")
   readyNowEnabled        Boolean   @default(false) @map("ready_now_enabled")
   instantAvailableUntil  DateTime? @map("instant_available_until")
@@ -145,6 +148,7 @@ model Request {
   toDateTime                DateTime?     @map("to_date_time")
   timezoneOffsetMinutes     Int           @default(0) @map("timezone_offset_minutes")
   instantBooking            Boolean       @default(false) @map("instant_booking")
+  quickPickGroupId          String?       @map("quick_pick_group_id")
   responseDeadlineAt        DateTime?     @map("response_deadline_at")
   message                   String?       @default("")
   bookingFor                String        @default("self") @map("booking_for")
@@ -154,9 +158,13 @@ model Request {
   beneficiaryNote           String?       @map("beneficiary_note")
   readyToPayTravelCharges   Boolean       @default(false) @map("ready_to_pay_travel_charges")
   readyToPayTip             Boolean       @default(false) @map("ready_to_pay_tip")
+  extraSupportAmount        Float?        @map("extra_support_amount")
   needsMateVehicle          Boolean       @default(false) @map("needs_mate_vehicle")
   offersRequesterVehicle    Boolean       @default(false) @map("offers_requester_vehicle")
+  neededMateVehicleTypes    String[]      @default([]) @map("needed_mate_vehicle_types")
+  offeredRequesterVehicleType String?     @map("offered_requester_vehicle_type")
   quotedHourlyRate          Float?        @map("quoted_hourly_rate")
+  scheduledReminderSentAt   DateTime?     @map("scheduled_reminder_sent_at")
   status                    RequestStatus @default(PENDING)
   messages                  Message[]     @relation("RequestMessages")
   reports                   Report[]
@@ -176,6 +184,7 @@ model Request {
   updatedAt                 DateTime      @updatedAt @map("updated_at")
 
   @@map("requests")
+  @@index([quickPickGroupId])
 }
 
 model Message {
@@ -188,6 +197,8 @@ model Message {
   type            String    @default("text") // 'text', 'image', 'voice'
   mediaUrl        String?   @map("media_url")
   voiceDuration   Int?      @map("voice_duration")
+  viewOnce        Boolean   @default(false) @map("view_once")
+  openedAt        DateTime? @map("opened_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   expiresAt       DateTime  @default(dbgenerated("(CURRENT_TIMESTAMP + '1 month'::interval)")) @map("expires_at")
   isDeleted       Boolean   @default(false) @map("is_deleted")
@@ -199,6 +210,7 @@ model Message {
   undelivered UndeliveredMessage?
 
   @@index([expiresAt])
+  @@index([viewOnce, openedAt])
   @@map("messages")
 }
 

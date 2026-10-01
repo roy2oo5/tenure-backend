@@ -12,6 +12,7 @@ vi.mock('@/config/database', () => ({
       delete: vi.fn(),
     },
     profile: {
+      findUnique: vi.fn(),
       updateMany: vi.fn(),
     },
   },
@@ -285,6 +286,7 @@ describe('UserService', () => {
         where: { userId: 123, instantAvailable: true },
         data: {
           instantAvailable: false,
+          readyNowEnabled: false,
           instantAvailableUntil: null,
           instantCategories: [],
           instantNote: null,

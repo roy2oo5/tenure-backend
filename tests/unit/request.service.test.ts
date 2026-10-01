@@ -1,6 +1,7 @@
 import { RequestService } from '@/services/request.service';
 import { prisma } from '@/config/database';
-import { RequestStatus } from '@prisma/client';
+import { RequestStatus, SessionStatus } from '@prisma/client';
+import { sendGlobalToUser, sendToUserForRequest } from '@/services/websocket.service';
 
 vi.mock('@/config/firebase', () => ({
   sendPushNotification: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('@/config/database', () => ({
   prisma: {
     request: {
       create: vi.fn(),
+      createMany: vi.fn(),
       findFirst: vi.fn(),
       findMany: vi.fn(),
       findUnique: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock('@/config/database', () => ({
     },
     profile: {
       findUnique: vi.fn(),
+      findMany: vi.fn(),
       updateMany: vi.fn(),
     },
     user: {
@@ -38,6 +41,7 @@ vi.mock('@/config/database', () => ({
     },
     block: {
       findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn(),
     },
     $queryRaw: vi.fn(),
     $transaction: vi.fn(async (callback: any) => callback(prisma)),
@@ -48,7 +52,9 @@ describe('RequestService', () => {
   beforeEach(() => {
     (prisma.$transaction as any).mockImplementation(async (callback: any) => callback(prisma));
     (prisma.block.findFirst as any).mockResolvedValue(null);
+    (prisma.block.findMany as any).mockResolvedValue([]);
     (prisma.request.findFirst as any).mockResolvedValue(null);
+    (prisma.request.findMany as any).mockResolvedValue([]);
     (prisma.request.count as any).mockResolvedValue(0);
     (prisma.message.deleteMany as any).mockResolvedValue({ count: 0 });
     (prisma.profile.findUnique as any).mockResolvedValue({
@@ -61,6 +67,294 @@ describe('RequestService', () => {
   afterEach(() => {
     vi.resetAllMocks();
     vi.useRealTimers();
+  });
+
+  describe('Quick Pick', () => {
+    const input = {
+      category: 'Travel Companion',
+      meetLocation: 'Selected location',
+      latitude: 12.9716,
+      longitude: 77.5946,
+      hourlyRate: 400,
+      durationMinutes: 60,
+      responseTime: 5,
+      timezoneOffsetMinutes: 330,
+    };
+
+    it('reports no eligible supporter separately from a response timeout', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([]);
+      await expect(RequestService.createQuickPick(1, input)).rejects.toThrow(
+        'No supporter found within 50 km of your selected location.',
+      );
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
+    it('blocks another Quick Pick for self while support is confirmed or running', async () => {
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
+      (prisma.profile.findMany as any).mockResolvedValue([]);
+
+      await expect(RequestService.createQuickPick(1, input)).rejects.toThrow(
+        'Book for Someone Else while your support is confirmed or running.',
+      );
+      expect(prisma.request.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          OR: [{ senderId: 1 }, { receiverId: 1 }],
+          status: RequestStatus.CONFIRMED,
+          AND: [
+            {
+              OR: [
+                { session: null },
+                { session: { is: { status: { not: SessionStatus.ENDED } } } },
+              ],
+            },
+          ],
+        }),
+        select: { id: true },
+      });
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
+    it('blocks Quick Pick for self while confirmed as a supporter', async () => {
+      (prisma.request.findFirst as any).mockImplementationOnce(({ where }: any) =>
+        where.OR?.some((condition: any) => condition.receiverId === 1)
+          ? { id: 102 }
+          : null,
+      );
+      (prisma.profile.findMany as any).mockResolvedValue([]);
+
+      await expect(RequestService.createQuickPick(1, input)).rejects.toThrow(
+        'Book for Someone Else while your support is confirmed or running.',
+      );
+      expect(prisma.request.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          OR: [{ senderId: 1 }, { receiverId: 1 }],
+          status: RequestStatus.CONFIRMED,
+        }),
+        select: { id: true },
+      });
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
+    it('allows someone else mode during current support but caps confirmed bookings at three', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T20:00:00.000Z'));
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      (prisma.request.count as any).mockResolvedValue(3);
+
+      await expect(
+        RequestService.createQuickPick(1, {
+          ...input,
+          bookingFor: 'someone_else',
+          beneficiaryName: 'Another person',
+        }),
+      ).rejects.toThrow('You have already booked for 3 people.');
+      expect(prisma.request.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          senderId: 1,
+          bookingFor: 'someone_else',
+          status: RequestStatus.CONFIRMED,
+          fromDateTime: {
+            gte: new Date('2027-06-20T18:30:00.000Z'),
+            lt: new Date('2027-06-21T18:30:00.000Z'),
+          },
+        }),
+      });
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
+    it('creates a someone else Quick Pick when two bookings are confirmed', async () => {
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 202, receiverId: 2 }]);
+      (prisma.request.count as any).mockResolvedValue(2);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, {
+        ...input,
+        bookingFor: 'someone_else',
+        beneficiaryName: '  Third person  ',
+        beneficiaryNote: 'Age: 30',
+      });
+
+      expect(result.supporterCount).toBe(1);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            receiverId: 2,
+            bookingFor: 'someone_else',
+            beneficiaryName: 'Third person',
+            beneficiaryNote: 'Age: 30',
+          }),
+        ],
+      });
+    });
+
+    it('dispatches only to Ready Now supporters within 50 km', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+        { userId: 3, latitude: 13.9, longitude: 77.595, categories: ['Travel Companion'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 201, receiverId: 2 }]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, input);
+
+      expect(result.supporterCount).toBe(1);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            receiverId: 2,
+            quotedHourlyRate: 400,
+            instantBooking: true,
+            status: RequestStatus.PENDING,
+          }),
+        ],
+      });
+    });
+
+    it('allows the same supporter after their confirmed support session has ended', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([]) // No scheduled meeting.
+        .mockResolvedValueOnce([]) // The ended session is excluded by the query.
+        .mockResolvedValueOnce([{ id: 202, receiverId: 2 }]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, input);
+
+      expect(prisma.request.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            senderId: 1,
+            receiverId: { in: [2] },
+            AND: [
+              {
+                OR: [
+                  { session: null },
+                  { session: { is: { status: { not: SessionStatus.ENDED } } } },
+                ],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(result.supporterCount).toBe(1);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ receiverId: 2, status: RequestStatus.PENDING })],
+      });
+    });
+
+    it('keeps a supporter with an unfinished request ineligible', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ receiverId: 2 }]);
+
+      await expect(RequestService.createQuickPick(1, input)).rejects.toThrow(
+        'No supporter found within 50 km of your selected location.',
+      );
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
+    it('matches legacy and open-to-any categories the same way as Ready Now discovery', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Buddy'] },
+        { userId: 3, latitude: 12.972, longitude: 77.595, categories: ['Open to Any'] },
+        { userId: 4, latitude: 12.972, longitude: 77.595, categories: ['Shopping Support'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 201, receiverId: 2 },
+          { id: 202, receiverId: 3 },
+        ]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 2 });
+
+      const result = await RequestService.createQuickPick(1, {
+        ...input,
+        category: 'Travel Support',
+      });
+
+      expect(result.supporterCount).toBe(2);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({ receiverId: 2 }),
+          expect.objectContaining({ receiverId: 3 }),
+        ],
+      });
+    });
+
+    it('reports a response timeout when eligible supporters did not accept', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:06:00.000Z'));
+      (prisma.request.findMany as any).mockResolvedValue([
+        {
+          id: 201,
+          status: RequestStatus.EXPIRED,
+          responseDeadlineAt: new Date('2027-06-20T10:05:00.000Z'),
+        },
+      ]);
+
+      const result = await RequestService.getQuickPickStatus(1, 'group-id');
+
+      expect(result.state).toBe('timed_out');
+      expect(result.supporter).toBeNull();
+    });
+
+    it('reports an automatically cancelled Quick Pick as a response timeout', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:06:00.000Z'));
+      (prisma.request.findMany as any).mockResolvedValue([
+        {
+          id: 201,
+          status: RequestStatus.CANCELLED,
+          cancellationFeeReason: 'Response time elapsed',
+          createdAt: new Date('2027-06-20T10:00:00.000Z'),
+          responseDeadlineAt: new Date('2027-06-20T10:05:00.000Z'),
+        },
+      ]);
+
+      const result = await RequestService.getQuickPickStatus(1, 'group-id');
+
+      expect(result.state).toBe('timed_out');
+      expect(result.responseTimeMinutes).toBe(5);
+    });
+
+    it('waits until the response deadline even when every supporter declines early', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:04:00.000Z'));
+      (prisma.request.findMany as any).mockResolvedValue([
+        {
+          id: 201,
+          status: RequestStatus.DECLINED,
+          responseDeadlineAt: new Date('2027-06-20T10:05:00.000Z'),
+        },
+      ]);
+
+      const result = await RequestService.getQuickPickStatus(1, 'group-id');
+
+      expect(result.state).toBe('waiting');
+    });
   });
 
   describe('createRequest', () => {
@@ -176,7 +470,8 @@ describe('RequestService', () => {
       };
 
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
-      (prisma.request.findFirst as any).mockResolvedValue({ id: 101 });
+      (prisma.request.findFirst as any)
+        .mockResolvedValueOnce({ id: 101 });
 
       await expect(
         RequestService.createRequest(1, {
@@ -189,22 +484,222 @@ describe('RequestService', () => {
         }),
       ).rejects.toThrow('You have already sent a request to this user');
 
+      expect(prisma.request.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ senderId: 1, receiverId: 2 }),
+          select: { id: true },
+        }),
+      );
+      expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks an instant request for self during confirmed support in either role', async () => {
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T12:00:00.000Z'),
+          instantBooking: true,
+        }),
+      ).rejects.toThrow('Book for Someone Else while your support is confirmed or running.');
       expect(prisma.request.findFirst).toHaveBeenCalledWith({
         where: {
-          senderId: 1,
-          receiverId: 2,
-          status: {
-            in: [
-              RequestStatus.PENDING,
-              RequestStatus.ACCEPTED_BY_RECEIVER,
-              RequestStatus.CONFIRMED,
-            ],
-          },
-          OR: [{ session: null }, { session: { is: { status: { not: 'ENDED' } } } }],
+          OR: [{ senderId: 1 }, { receiverId: 1 }],
+          status: RequestStatus.CONFIRMED,
+          AND: [
+            {
+              OR: [
+                { session: null },
+                { session: { is: { status: { not: SessionStatus.ENDED } } } },
+              ],
+            },
+          ],
         },
         select: { id: true },
       });
       expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('requires Book for Someone Else only on the date of confirmed scheduled support', async () => {
+      const fifth = new Date('2027-07-05T10:00:00.000Z');
+      const sixth = new Date('2027-07-06T10:00:00.000Z');
+      const confirmed = { id: 100, fromDateTime: fifth, toDateTime: null, receiverId: 3 };
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([confirmed])
+        .mockResolvedValueOnce([]);
+
+      await expect(RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: fifth,
+        toDateTime: new Date('2027-07-05T11:00:00.000Z'),
+      })).rejects.toThrow('This date is fully booked by a confirmed scheduled meet');
+
+      vi.clearAllMocks();
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([confirmed])
+        .mockResolvedValueOnce([]);
+      (prisma.request.create as any).mockResolvedValue({
+        id: 102,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: sixth,
+        toDateTime: new Date('2027-07-06T11:00:00.000Z'),
+        status: RequestStatus.PENDING,
+        createdAt: new Date(),
+      });
+
+      await expect(RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: sixth,
+        toDateTime: new Date('2027-07-06T11:00:00.000Z'),
+      })).resolves.toMatchObject({ id: 102 });
+      expect(prisma.request.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            senderId: 1,
+            receiverId: 2,
+            AND: expect.arrayContaining([
+              expect.objectContaining({
+                OR: expect.arrayContaining([
+                  expect.objectContaining({
+                    status: RequestStatus.CONFIRMED,
+                    fromDateTime: {
+                      gte: new Date('2027-07-06T00:00:00.000Z'),
+                      lt: new Date('2027-07-07T00:00:00.000Z'),
+                    },
+                  }),
+                ]),
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it('allows a normal scheduled request today when confirmed support is on the fifth', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-07-01T08:00:00.000Z'));
+      const today = new Date('2027-07-01T10:00:00.000Z');
+      const fifth = new Date('2027-07-05T10:00:00.000Z');
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 100, fromDateTime: fifth, toDateTime: null, receiverId: 3 }])
+        .mockResolvedValueOnce([]);
+      (prisma.request.create as any).mockResolvedValue({
+        id: 103,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: today,
+        toDateTime: new Date('2027-07-01T11:00:00.000Z'),
+        status: RequestStatus.PENDING,
+        createdAt: new Date(),
+      });
+
+      await expect(RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: today,
+        toDateTime: new Date('2027-07-01T11:00:00.000Z'),
+      })).resolves.toMatchObject({ id: 103 });
+    });
+
+    it('rejects a fourth someone else request on the selected date', async () => {
+      (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
+      (prisma.request.count as any)
+        .mockResolvedValueOnce(0) // Hourly request limit.
+        .mockResolvedValueOnce(3); // Confirmed someone else bookings.
+
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: new Date('2027-06-20T20:00:00.000Z'),
+          toDateTime: new Date('2027-06-20T21:00:00.000Z'),
+          timezoneOffsetMinutes: 330,
+          bookingFor: 'someone_else',
+          beneficiaryName: 'Fourth person',
+        }),
+      ).rejects.toThrow('You have already booked for 3 people.');
+
+      expect(prisma.request.count).toHaveBeenNthCalledWith(2, {
+        where: {
+          senderId: 1,
+          bookingFor: 'someone_else',
+          status: RequestStatus.CONFIRMED,
+          fromDateTime: {
+            gte: new Date('2027-06-20T18:30:00.000Z'),
+            lt: new Date('2027-06-21T18:30:00.000Z'),
+          },
+        },
+      });
+      expect(prisma.request.create).not.toHaveBeenCalled();
+    });
+
+    it('allows booking someone else alongside the sender’s confirmed scheduled meet', async () => {
+      const fromDateTime = new Date('2027-06-20T10:00:00.000Z');
+      (prisma.user.findUnique as any).mockResolvedValue({
+        id: 2,
+        name: 'Supporter',
+        tenureId: 'TN123',
+        profile: { fullName: 'Supporter' },
+      });
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([
+          { id: 100, fromDateTime, toDateTime: null, receiverId: 3 },
+        ])
+        .mockResolvedValueOnce([]);
+      (prisma.request.create as any).mockResolvedValue({
+        id: 102,
+        senderId: 1,
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime,
+        toDateTime: new Date('2027-06-20T11:00:00.000Z'),
+        status: RequestStatus.PENDING,
+        createdAt: new Date('2027-06-19T10:00:00.000Z'),
+        updatedAt: new Date('2027-06-19T10:00:00.000Z'),
+      });
+
+      await expect(RequestService.createRequest(1, {
+        receiverId: 2,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime,
+        toDateTime: new Date('2027-06-20T11:00:00.000Z'),
+        bookingFor: 'someone_else',
+        beneficiaryName: 'Another person',
+      })).resolves.toMatchObject({ id: 102 });
+      expect(prisma.request.create).toHaveBeenCalled();
     });
 
     it('should allow requests to different receivers while another request is active', async () => {
@@ -300,21 +795,12 @@ describe('RequestService', () => {
         toDateTime: new Date('2027-06-20T12:00:00.000Z'),
       });
 
-      expect(prisma.request.findFirst).toHaveBeenCalledWith({
-        where: {
-          senderId: 1,
-          receiverId: 2,
-          status: {
-            in: [
-              RequestStatus.PENDING,
-              RequestStatus.ACCEPTED_BY_RECEIVER,
-              RequestStatus.CONFIRMED,
-            ],
-          },
-          OR: [{ session: null }, { session: { is: { status: { not: 'ENDED' } } } }],
-        },
-        select: { id: true },
-      });
+      expect(prisma.request.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ senderId: 1, receiverId: 2 }),
+          select: { id: true },
+        }),
+      );
       expect(prisma.request.create).toHaveBeenCalled();
     });
 
@@ -601,7 +1087,7 @@ describe('RequestService', () => {
 
     it('should persist stale requests as expired and return them in history state', async () => {
       vi.useFakeTimers();
-      vi.setSystemTime(new Date('2027-06-20T22:00:00.000Z'));
+      vi.setSystemTime(new Date('2027-06-21T10:00:00.000Z'));
 
       const receiver = {
         id: 4,
@@ -620,6 +1106,7 @@ describe('RequestService', () => {
         meetLocation: 'Library',
         message: '',
         createdAt: new Date('2027-06-20T08:00:00.000Z'),
+        updatedAt: new Date('2027-06-20T08:00:00.000Z'),
         receiver,
         session: null,
       };
@@ -656,10 +1143,22 @@ describe('RequestService', () => {
       const result = await RequestService.listUserRequests(3);
 
       expect(prisma.request.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [201, 202, 203] } },
+        where: { id: { in: [201, 202] } },
         data: {
           status: RequestStatus.EXPIRED,
           otp: null,
+        },
+      });
+      expect(prisma.request.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: [203] },
+          status: RequestStatus.CONFIRMED,
+          session: null,
+        },
+        data: {
+          status: RequestStatus.EXPIRED,
+          otp: null,
+          cancellationFeeReason: 'OTP was not entered on the scheduled support date.',
         },
       });
       expect(result.sent.map((request) => request.status)).toEqual([
@@ -760,6 +1259,77 @@ describe('RequestService', () => {
   });
 
   describe('updateRequestStatus', () => {
+    it('blocks confirming a self booking after another support became active', async () => {
+      (prisma.request.findUnique as any)
+        .mockResolvedValueOnce({
+          id: 101,
+          senderId: 1,
+          receiverId: 2,
+          status: RequestStatus.ACCEPTED_BY_RECEIVER,
+          bookingFor: 'self',
+          instantBooking: true,
+          quotedHourlyRate: 275,
+          fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+          timezoneOffsetMinutes: 330,
+        })
+        .mockResolvedValueOnce({ status: RequestStatus.ACCEPTED_BY_RECEIVER });
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 102 });
+
+      await expect(RequestService.updateRequestStatus(1, 101, 'confirmed')).rejects.toThrow(
+        'Book for Someone Else while your support is confirmed or running.',
+      );
+      expect(prisma.request.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: { not: 101 },
+          OR: [{ senderId: 1 }, { receiverId: 1 }],
+          status: RequestStatus.CONFIRMED,
+          AND: [
+            {
+              OR: [
+                { session: null },
+                { session: { is: { status: { not: SessionStatus.ENDED } } } },
+              ],
+            },
+          ],
+        },
+        select: { id: true },
+      });
+      expect(prisma.request.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects final confirmation of a fourth someone else booking', async () => {
+      const request = {
+        id: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        bookingFor: 'someone_else',
+        quotedHourlyRate: 275,
+        fromDateTime: new Date('2027-06-20T10:00:00.000Z'),
+        timezoneOffsetMinutes: 330,
+      };
+      (prisma.request.findUnique as any)
+        .mockResolvedValueOnce(request)
+        .mockResolvedValueOnce({ status: RequestStatus.ACCEPTED_BY_RECEIVER });
+      (prisma.request.count as any).mockResolvedValue(3);
+
+      await expect(RequestService.updateRequestStatus(1, 101, 'confirmed')).rejects.toThrow(
+        'You have already booked for 3 people.',
+      );
+      expect(prisma.request.count).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          bookingFor: 'someone_else',
+          status: RequestStatus.CONFIRMED,
+          fromDateTime: {
+            gte: new Date('2027-06-19T18:30:00.000Z'),
+            lt: new Date('2027-06-20T18:30:00.000Z'),
+          },
+        },
+      });
+      expect(prisma.request.update).not.toHaveBeenCalled();
+    });
+
     it('should throw an error if request does not exist', async () => {
       (prisma.request.findUnique as any).mockResolvedValue(null);
 
@@ -783,7 +1353,7 @@ describe('RequestService', () => {
       );
     });
 
-    it('should throw an error if receiver tries to cancel', async () => {
+    it('should throw an error if an unrelated user tries to cancel', async () => {
       const mockRequest = {
         id: 101,
         senderId: 1,
@@ -793,7 +1363,7 @@ describe('RequestService', () => {
 
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
 
-      await expect(RequestService.updateRequestStatus(2, 101, 'cancelled')).rejects.toThrow(
+      await expect(RequestService.updateRequestStatus(999, 101, 'cancelled')).rejects.toThrow(
         'You are not authorized to cancel this request',
       );
     });
@@ -924,7 +1494,7 @@ describe('RequestService', () => {
       });
       expect(result.status).toBe('confirmed');
       expect(result.direction).toBe('sent');
-      expect(result.otp).toBeNull();
+      expect(result.otp).toBe('1234');
     });
 
     it('should auto-cancel a reciprocal request for the same meeting date', async () => {
@@ -973,10 +1543,7 @@ describe('RequestService', () => {
       expect(firstAutoCancellation.where).toMatchObject({
         id: { not: 101 },
         status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
-        OR: [
-          { senderId: 1 },
-          { senderId: 2, receiverId: 1 },
-        ],
+        OR: [{ senderId: 1 }, { senderId: 2, receiverId: 1 }],
       });
       expect(firstAutoCancellation.where.fromDateTime).toEqual({
         gte: new Date('2027-06-19T18:30:00.000Z'),
@@ -986,6 +1553,129 @@ describe('RequestService', () => {
         status: RequestStatus.CANCELLED,
         otp: null,
         cancellationFeeReason: 'Auto Cancelled',
+      });
+    });
+
+    it('cancels normal requests on Quick Pick confirmation and updates both participants', async () => {
+      const request = {
+        id: 101,
+        senderId: 1,
+        receiverId: 3,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-07-01T10:00:00.000Z'),
+        toDateTime: new Date('2027-07-01T11:00:00.000Z'),
+        timezoneOffsetMinutes: 0,
+        instantBooking: true,
+        quickPickGroupId: 'group-id',
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        quotedHourlyRate: 275,
+      };
+      const confirmed = {
+        ...request,
+        status: RequestStatus.CONFIRMED,
+        otp: null,
+        createdAt: new Date(),
+        sender: {
+          id: 1,
+          name: 'Person A',
+          tenureId: 'TN111',
+          profile: { fullName: 'Person A', profilePhoto: '' },
+        },
+        receiver: {
+          id: 3,
+          name: 'Person C',
+          tenureId: 'TN333',
+          profile: { fullName: 'Person C', profilePhoto: '' },
+        },
+      };
+      (prisma.request.findUnique as any)
+        .mockResolvedValueOnce(request)
+        .mockResolvedValueOnce({ status: RequestStatus.ACCEPTED_BY_RECEIVER });
+      (prisma.request.update as any).mockResolvedValue(confirmed);
+      (prisma.request.findMany as any).mockResolvedValueOnce([{ id: 202, receiverId: 2 }]);
+
+      await RequestService.updateRequestStatus(1, 101, 'confirmed');
+
+      expect(prisma.request.updateMany).toHaveBeenCalledWith({
+        where: {
+          senderId: 1,
+          id: { not: 101 },
+          quickPickGroupId: null,
+          status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+        },
+        data: expect.objectContaining({
+          status: RequestStatus.CANCELLED,
+          cancelledAt: expect.any(Date),
+          cancellationFeeReason: 'Auto Cancelled',
+        }),
+      });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_updated' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_updated' });
+      expect(sendToUserForRequest).toHaveBeenCalledWith(1, 202, {
+        event: 'request_cancelled',
+        requestId: 202,
+      });
+      expect(sendToUserForRequest).toHaveBeenCalledWith(2, 202, {
+        event: 'request_cancelled',
+        requestId: 202,
+      });
+    });
+
+    it('cancels the normal request as soon as the Quick Pick supporter accepts', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-07-01T10:00:00.000Z'));
+      const request = {
+        id: 101,
+        senderId: 1,
+        receiverId: 3,
+        categoryId: 'study',
+        categoryLabel: 'Study Partner',
+        meetLocation: 'Library',
+        fromDateTime: new Date('2027-07-01T10:00:00.000Z'),
+        toDateTime: new Date('2027-07-01T11:00:00.000Z'),
+        instantBooking: true,
+        quickPickGroupId: 'group-id',
+        responseDeadlineAt: new Date('2027-07-01T10:05:00.000Z'),
+        status: RequestStatus.PENDING,
+        quotedHourlyRate: 275,
+      };
+      const accepted = {
+        ...request,
+        status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        createdAt: new Date(),
+        sender: { id: 1, name: 'Person A', profile: {} },
+        receiver: { id: 3, name: 'Person C', profile: {} },
+      };
+      (prisma.request.findUnique as any)
+        .mockResolvedValueOnce(request)
+        .mockResolvedValueOnce({
+          status: RequestStatus.PENDING,
+          responseDeadlineAt: request.responseDeadlineAt,
+        });
+      (prisma.request.update as any).mockResolvedValue(accepted);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([{ id: 202, receiverId: 2 }])
+        .mockResolvedValueOnce([]);
+
+      await RequestService.updateRequestStatus(3, 101, 'confirmed');
+
+      expect(prisma.request.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            senderId: 1,
+            quickPickGroupId: null,
+            status: { in: [RequestStatus.PENDING, RequestStatus.ACCEPTED_BY_RECEIVER] },
+          }),
+          data: expect.objectContaining({ status: RequestStatus.CANCELLED }),
+        }),
+      );
+      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_updated' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_updated' });
+      expect(sendToUserForRequest).toHaveBeenCalledWith(2, 202, {
+        event: 'request_cancelled',
+        requestId: 202,
       });
     });
 
@@ -1048,7 +1738,7 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(1, 101, 'cancelled');
+      const result = await RequestService.updateRequestStatus(1, 101, 'cancelled', 'Plans changed');
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
@@ -1058,7 +1748,7 @@ describe('RequestService', () => {
           cancelledAt: new Date('2027-06-20T09:30:00.000Z'),
           cancelledById: 1,
           cancellationFee: 0,
-          cancellationFeeReason: null,
+          cancellationFeeReason: 'Plans changed',
         },
         include: {
           sender: { include: { profile: true } },
@@ -1133,6 +1823,8 @@ describe('RequestService', () => {
           type: 'text',
           mediaUrl: null,
           voiceDuration: null,
+          viewOnce: false,
+          expiresAt: new Date('2026-07-25T10:00:00.000Z'),
           createdAt: new Date('2026-06-25T10:00:00.000Z'),
         },
         {
@@ -1146,6 +1838,8 @@ describe('RequestService', () => {
           type: 'text',
           mediaUrl: null,
           voiceDuration: null,
+          viewOnce: false,
+          expiresAt: new Date('2026-07-25T10:01:00.000Z'),
           createdAt: new Date('2026-06-25T10:01:00.000Z'),
         },
       ];

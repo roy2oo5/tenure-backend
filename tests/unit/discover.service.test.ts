@@ -5,9 +5,11 @@ vi.mock('@/config/database', () => ({
   prisma: {
     profile: {
       findMany: vi.fn(),
+      findUnique: vi.fn(),
     },
     block: {
       findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     savedMate: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -29,6 +31,75 @@ describe('DiscoverService', () => {
   });
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('limits private profiles to the active Ready Now surface', async () => {
+    const expiry = new Date(Date.now() + 60 * 60 * 1000);
+    const privateProfile = {
+      userId: 9,
+      fullName: 'Ready User',
+      profileVisibility: false,
+      readyNowEnabled: true,
+      instantAvailable: true,
+      instantAvailableUntil: expiry,
+      profilePhoto: null,
+      district: 'Bangalore',
+      state: 'Karnataka',
+      gender: 'Woman',
+      dob: new Date('1998-01-01'),
+      categories: [],
+      hourlyRate: null,
+      categoryRates: {},
+      languages: ['English'],
+      about: 'Ready now',
+      availableDays: [],
+      availableTimeRange: null,
+      bestTime: null,
+      aadhaarVerified: false,
+      gallery: [],
+      instagram: null,
+      facebook: null,
+      youtube: null,
+      website: null,
+      instantCategories: [],
+      instantNote: null,
+      user: {
+        isActive: true,
+        tenureId: 'RD123',
+        email: 'ready@example.com',
+        phone: '9999999993',
+      },
+    };
+    (prisma.profile.findMany as any).mockResolvedValue([privateProfile]);
+    (prisma.profile.findUnique as any).mockResolvedValue(privateProfile);
+
+    const readyMates = await DiscoverService.getInstantMates(2, {});
+    expect(readyMates).toHaveLength(1);
+    expect(prisma.profile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          instantAvailable: true,
+          readyNowEnabled: true,
+          instantAvailableUntil: { gt: expect.any(Date) },
+        }),
+      }),
+    );
+    expect((prisma.profile.findMany as any).mock.calls[0][0].where).not.toHaveProperty(
+      'profileVisibility',
+    );
+
+    await DiscoverService.searchMates(2, {});
+    expect((prisma.profile.findMany as any).mock.calls[1][0].where).toHaveProperty(
+      'profileVisibility',
+      true,
+    );
+    expect(await DiscoverService.getMatePublicProfile(2, 9)).not.toBeNull();
+
+    (prisma.profile.findUnique as any).mockResolvedValue({
+      ...privateProfile,
+      instantAvailable: false,
+    });
+    expect(await DiscoverService.getMatePublicProfile(2, 9)).toBeNull();
   });
 
   it('excludes the current user and applies text search', async () => {
@@ -221,7 +292,7 @@ describe('DiscoverService', () => {
     expect(results[0].fullName).toBe('Kannada User');
   });
 
-  it('lists instant mates while ready now is enabled without requiring an expiry time', async () => {
+  it('lists instant mates while Ready Now has not expired', async () => {
     const profiles = [
       {
         userId: 5,
@@ -263,8 +334,8 @@ describe('DiscoverService', () => {
 
     expect(prisma.profile.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.not.objectContaining({
-          instantAvailableUntil: expect.anything(),
+        where: expect.objectContaining({
+          instantAvailableUntil: { gt: expect.any(Date) },
         }),
       }),
     );
@@ -298,7 +369,7 @@ describe('DiscoverService', () => {
         youtube: null,
         website: null,
         instantAvailable: true,
-        instantAvailableUntil: null,
+        instantAvailableUntil: new Date(Date.now() + 60 * 60 * 1000),
         instantCategories: [],
         instantNote: null,
         user: {
@@ -322,7 +393,7 @@ describe('DiscoverService', () => {
     );
     expect(results).toHaveLength(1);
     expect(results[0].fullName).toBe('User 1');
-    expect(results[0].category).toBe('Support');
+    expect(results[0].category).toBe('Support Based on Request');
     expect(results[0].profilePhoto).toBeNull();
     expect(results[0].instantAvailable).toBe(true);
   });
