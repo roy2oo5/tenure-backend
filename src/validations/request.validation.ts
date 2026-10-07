@@ -157,6 +157,11 @@ export const createQuickPickSchema = z.object({
       .number()
       .int()
       .refine((value) => [5, 8, 10, 12, 15, 20].includes(value)),
+    radiusKm: z
+      .number()
+      .int()
+      .refine((value) => value >= 10 && value <= 100 && value % 10 === 0)
+      .default(50),
     timezoneOffsetMinutes: z.number().int().min(-840).max(840),
   }),
 });

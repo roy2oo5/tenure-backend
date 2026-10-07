@@ -14,15 +14,18 @@ async function setAvailabilityForEnabledUsers(
         userId,
         readyNowEnabled: true,
         instantAvailable: !instantAvailable,
-        ...(instantAvailable
-          ? { instantAvailableUntil: { gt: new Date() } }
-          : {}),
+        ...(instantAvailable ? { instantAvailableUntil: { gt: new Date() } } : {}),
       },
       data: { instantAvailable },
     });
     if (result.count > 0) {
       updatedCount += result.count;
-      sendGlobalToAll({ event: 'instants_updated', userId, instantAvailable });
+      sendGlobalToAll({
+        event: 'busy_now_changed',
+        userId,
+        busyNow: !instantAvailable,
+        instantAvailable,
+      });
     }
   }
   return updatedCount;

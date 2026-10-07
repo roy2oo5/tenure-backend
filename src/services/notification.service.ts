@@ -3,6 +3,7 @@ import { Notification } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { sendPushNotification } from '../config/firebase';
 import { logger } from '../utils/logger';
+import { sendGlobalToUser } from './websocket.service';
 
 export class NotificationService {
   /**
@@ -36,6 +37,14 @@ export class NotificationService {
             }
           : {}),
       },
+    });
+
+    // The global socket is the foreground delivery path. Push notifications
+    // remain the background/offline path, while connected clients can refresh
+    // their alert list and badge immediately from this event.
+    sendGlobalToUser(userId, {
+      event: 'notification_created',
+      notification,
     });
 
     // Send push notification asynchronously

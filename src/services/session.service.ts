@@ -2,7 +2,7 @@ import { prisma } from '../config/database';
 import { otpProximityForRequest } from '../utils/otp-proximity';
 import { AppError } from '../utils/app-error';
 import { Profile, SessionStatus, RequestStatus } from '@prisma/client';
-import { sendToUser, sendGlobalToUser } from './websocket.service';
+import { sendToUser, sendGlobalToAll, sendGlobalToUser } from './websocket.service';
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 import { restoreReadyNow } from './ready-now.service';
@@ -714,6 +714,11 @@ export class SessionService {
     });
 
     await restoreReadyNow([updated.senderId, updated.receiverId]);
+    sendGlobalToAll({
+      event: 'busy_now_changed',
+      userIds: [updated.senderId, updated.receiverId],
+      busyNow: false,
+    });
 
     // Also update request status to cancel or expire if finished
     // But since session has finished, we can just keep request status as confirmed, or keep request state.

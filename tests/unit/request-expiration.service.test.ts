@@ -6,6 +6,8 @@ import {
   expireReadyNowRequests,
 } from '@/services/request-expiration.service';
 import { sendGlobalToUser } from '@/services/websocket.service';
+import { NotificationService } from '@/services/notification.service';
+import { restoreReadyNow } from '@/services/ready-now.service';
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -18,6 +20,14 @@ vi.mock('@/config/database', () => ({
 
 vi.mock('@/services/websocket.service', () => ({
   sendGlobalToUser: vi.fn(),
+}));
+
+vi.mock('@/services/notification.service', () => ({
+  NotificationService: { createNotification: vi.fn().mockResolvedValue({}) },
+}));
+
+vi.mock('@/services/ready-now.service', () => ({
+  restoreReadyNow: vi.fn().mockResolvedValue(0),
 }));
 
 describe('Ready Now request expiration', () => {
@@ -49,6 +59,12 @@ describe('Ready Now request expiration', () => {
       }),
     );
     expect(sendGlobalToUser).toHaveBeenCalledTimes(2);
+    expect(sendGlobalToUser).toHaveBeenCalledWith(1, {
+      event: 'request_expired',
+      requestId: 101,
+      status: 'expired',
+    });
+    expect(NotificationService.createNotification).toHaveBeenCalledTimes(2);
   });
 
   it('automatically cancels an unanswered Quick Pick at its response deadline', async () => {
@@ -78,6 +94,11 @@ describe('Ready Now request expiration', () => {
         },
       }),
     );
+    expect(sendGlobalToUser).toHaveBeenCalledWith(1, {
+      event: 'request_auto_cancelled',
+      requestId: 102,
+      status: 'cancelled',
+    });
   });
 });
 
@@ -137,5 +158,6 @@ describe('confirmed request OTP expiration', () => {
       }),
     );
     expect(sendGlobalToUser).toHaveBeenCalledTimes(2);
+    expect(restoreReadyNow).toHaveBeenCalledWith([1, 2]);
   });
 });

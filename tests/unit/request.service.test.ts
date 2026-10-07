@@ -1,7 +1,11 @@
 import { RequestService } from '@/services/request.service';
 import { prisma } from '@/config/database';
 import { RequestStatus, SessionStatus } from '@prisma/client';
-import { sendGlobalToUser, sendToUserForRequest } from '@/services/websocket.service';
+import {
+  sendGlobalToAll,
+  sendGlobalToUser,
+  sendToUserForRequest,
+} from '@/services/websocket.service';
 
 vi.mock('@/config/firebase', () => ({
   sendPushNotification: vi.fn(),
@@ -10,6 +14,7 @@ vi.mock('@/config/firebase', () => ({
 vi.mock('@/services/websocket.service', () => ({
   sendToUserForRequest: vi.fn(),
   sendGlobalToUser: vi.fn(),
+  sendGlobalToAll: vi.fn(),
 }));
 
 vi.mock('@/config/database', () => ({
@@ -89,6 +94,22 @@ describe('RequestService', () => {
       expect(prisma.request.createMany).not.toHaveBeenCalled();
     });
 
+    it('sends Quick Pick only to profiles with Support Based on Request selected', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        {
+          userId: 2,
+          latitude: 12.972,
+          longitude: 77.595,
+          categories: ['Travel Companion'],
+        },
+      ]);
+
+      await expect(RequestService.createQuickPick(1, input)).rejects.toThrow(
+        'No supporter found within 50 km of your selected location.',
+      );
+      expect(prisma.request.createMany).not.toHaveBeenCalled();
+    });
+
     it('blocks another Quick Pick for self while support is confirmed or running', async () => {
       (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
       (prisma.profile.findMany as any).mockResolvedValue([]);
@@ -116,9 +137,7 @@ describe('RequestService', () => {
 
     it('blocks Quick Pick for self while confirmed as a supporter', async () => {
       (prisma.request.findFirst as any).mockImplementationOnce(({ where }: any) =>
-        where.OR?.some((condition: any) => condition.receiverId === 1)
-          ? { id: 102 }
-          : null,
+        where.OR?.some((condition: any) => condition.receiverId === 1) ? { id: 102 } : null,
       );
       (prisma.profile.findMany as any).mockResolvedValue([]);
 
@@ -140,11 +159,14 @@ describe('RequestService', () => {
       vi.setSystemTime(new Date('2027-06-20T20:00:00.000Z'));
       (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
       (prisma.profile.findMany as any).mockResolvedValue([
-        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+        {
+          userId: 2,
+          latitude: 12.972,
+          longitude: 77.595,
+          categories: ['Support Based on Request'],
+        },
       ]);
-      (prisma.request.findMany as any)
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([]);
+      (prisma.request.findMany as any).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
       (prisma.request.count as any).mockResolvedValue(3);
 
       await expect(
@@ -171,7 +193,12 @@ describe('RequestService', () => {
     it('creates a someone else Quick Pick when two bookings are confirmed', async () => {
       (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
       (prisma.profile.findMany as any).mockResolvedValue([
-        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+        {
+          userId: 2,
+          latitude: 12.972,
+          longitude: 77.595,
+          categories: ['Support Based on Request'],
+        },
       ]);
       (prisma.request.findMany as any)
         .mockResolvedValueOnce([])
@@ -202,8 +229,8 @@ describe('RequestService', () => {
 
     it('dispatches only to Ready Now supporters within 50 km', async () => {
       (prisma.profile.findMany as any).mockResolvedValue([
-        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
-        { userId: 3, latitude: 13.9, longitude: 77.595, categories: ['Travel Companion'] },
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Support Based on Request'] },
+        { userId: 3, latitude: 13.9, longitude: 77.595, categories: ['Support Based on Request'] },
       ]);
       (prisma.request.findMany as any)
         .mockResolvedValueOnce([])
@@ -226,9 +253,47 @@ describe('RequestService', () => {
       });
     });
 
+    it('dispatches only to supporters within a selected 10 km radius', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 13.05, longitude: 77.5946, categories: ['Support Based on Request'] },
+        { userId: 3, latitude: 13.12, longitude: 77.5946, categories: ['Support Based on Request'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 201, receiverId: 2 }]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, { ...input, radiusKm: 10 });
+
+      expect(result.supporterCount).toBe(1);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ receiverId: 2 })],
+      });
+    });
+
+    it('includes supporters within a selected 100 km radius', async () => {
+      (prisma.profile.findMany as any).mockResolvedValue([
+        { userId: 2, latitude: 13.75, longitude: 77.5946, categories: ['Support Based on Request'] },
+        { userId: 3, latitude: 13.9, longitude: 77.5946, categories: ['Support Based on Request'] },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 201, receiverId: 2 }]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, { ...input, radiusKm: 100 });
+
+      expect(result.supporterCount).toBe(1);
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ receiverId: 2 })],
+      });
+    });
+
     it('allows the same supporter after their confirmed support session has ended', async () => {
       (prisma.profile.findMany as any).mockResolvedValue([
-        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Companion'] },
+        { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Support Based on Request'] },
       ]);
       (prisma.request.findMany as any)
         .mockResolvedValueOnce([]) // No scheduled meeting.
@@ -275,7 +340,7 @@ describe('RequestService', () => {
       expect(prisma.request.createMany).not.toHaveBeenCalled();
     });
 
-    it('matches legacy and open-to-any categories the same way as Ready Now discovery', async () => {
+    it('accepts legacy names for Support Based on Request but excludes specific categories', async () => {
       (prisma.profile.findMany as any).mockResolvedValue([
         { userId: 2, latitude: 12.972, longitude: 77.595, categories: ['Travel Buddy'] },
         { userId: 3, latitude: 12.972, longitude: 77.595, categories: ['Open to Any'] },
@@ -285,22 +350,18 @@ describe('RequestService', () => {
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
-          { id: 201, receiverId: 2 },
           { id: 202, receiverId: 3 },
         ]);
-      (prisma.request.createMany as any).mockResolvedValue({ count: 2 });
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
 
       const result = await RequestService.createQuickPick(1, {
         ...input,
         category: 'Travel Support',
       });
 
-      expect(result.supporterCount).toBe(2);
+      expect(result.supporterCount).toBe(1);
       expect(prisma.request.createMany).toHaveBeenCalledWith({
-        data: [
-          expect.objectContaining({ receiverId: 2 }),
-          expect.objectContaining({ receiverId: 3 }),
-        ],
+        data: [expect.objectContaining({ receiverId: 3 })],
       });
     });
 
@@ -470,8 +531,7 @@ describe('RequestService', () => {
       };
 
       (prisma.user.findUnique as any).mockResolvedValue(mockReceiver);
-      (prisma.request.findFirst as any)
-        .mockResolvedValueOnce({ id: 101 });
+      (prisma.request.findFirst as any).mockResolvedValueOnce({ id: 101 });
 
       await expect(
         RequestService.createRequest(1, {
@@ -536,14 +596,16 @@ describe('RequestService', () => {
         .mockResolvedValueOnce([confirmed])
         .mockResolvedValueOnce([]);
 
-      await expect(RequestService.createRequest(1, {
-        receiverId: 2,
-        categoryId: 'study',
-        categoryLabel: 'Study Partner',
-        meetLocation: 'Library',
-        fromDateTime: fifth,
-        toDateTime: new Date('2027-07-05T11:00:00.000Z'),
-      })).rejects.toThrow('This date is fully booked by a confirmed scheduled meet');
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: fifth,
+          toDateTime: new Date('2027-07-05T11:00:00.000Z'),
+        }),
+      ).rejects.toThrow('This date is fully booked by a confirmed scheduled meet');
 
       vi.clearAllMocks();
       (prisma.user.findUnique as any).mockResolvedValue({ id: 2, profile: {} });
@@ -564,14 +626,16 @@ describe('RequestService', () => {
         createdAt: new Date(),
       });
 
-      await expect(RequestService.createRequest(1, {
-        receiverId: 2,
-        categoryId: 'study',
-        categoryLabel: 'Study Partner',
-        meetLocation: 'Library',
-        fromDateTime: sixth,
-        toDateTime: new Date('2027-07-06T11:00:00.000Z'),
-      })).resolves.toMatchObject({ id: 102 });
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: sixth,
+          toDateTime: new Date('2027-07-06T11:00:00.000Z'),
+        }),
+      ).resolves.toMatchObject({ id: 102 });
       expect(prisma.request.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
@@ -618,14 +682,16 @@ describe('RequestService', () => {
         createdAt: new Date(),
       });
 
-      await expect(RequestService.createRequest(1, {
-        receiverId: 2,
-        categoryId: 'study',
-        categoryLabel: 'Study Partner',
-        meetLocation: 'Library',
-        fromDateTime: today,
-        toDateTime: new Date('2027-07-01T11:00:00.000Z'),
-      })).resolves.toMatchObject({ id: 103 });
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime: today,
+          toDateTime: new Date('2027-07-01T11:00:00.000Z'),
+        }),
+      ).resolves.toMatchObject({ id: 103 });
     });
 
     it('rejects a fourth someone else request on the selected date', async () => {
@@ -671,9 +737,7 @@ describe('RequestService', () => {
         profile: { fullName: 'Supporter' },
       });
       (prisma.request.findMany as any)
-        .mockResolvedValueOnce([
-          { id: 100, fromDateTime, toDateTime: null, receiverId: 3 },
-        ])
+        .mockResolvedValueOnce([{ id: 100, fromDateTime, toDateTime: null, receiverId: 3 }])
         .mockResolvedValueOnce([]);
       (prisma.request.create as any).mockResolvedValue({
         id: 102,
@@ -689,16 +753,18 @@ describe('RequestService', () => {
         updatedAt: new Date('2027-06-19T10:00:00.000Z'),
       });
 
-      await expect(RequestService.createRequest(1, {
-        receiverId: 2,
-        categoryId: 'study',
-        categoryLabel: 'Study Partner',
-        meetLocation: 'Library',
-        fromDateTime,
-        toDateTime: new Date('2027-06-20T11:00:00.000Z'),
-        bookingFor: 'someone_else',
-        beneficiaryName: 'Another person',
-      })).resolves.toMatchObject({ id: 102 });
+      await expect(
+        RequestService.createRequest(1, {
+          receiverId: 2,
+          categoryId: 'study',
+          categoryLabel: 'Study Partner',
+          meetLocation: 'Library',
+          fromDateTime,
+          toDateTime: new Date('2027-06-20T11:00:00.000Z'),
+          bookingFor: 'someone_else',
+          beneficiaryName: 'Another person',
+        }),
+      ).resolves.toMatchObject({ id: 102 });
       expect(prisma.request.create).toHaveBeenCalled();
     });
 
@@ -1611,15 +1677,22 @@ describe('RequestService', () => {
           cancellationFeeReason: 'Auto Cancelled',
         }),
       });
-      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_updated' });
-      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_updated' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_auto_cancelled' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_auto_cancelled' });
       expect(sendToUserForRequest).toHaveBeenCalledWith(1, 202, {
-        event: 'request_cancelled',
+        event: 'request_auto_cancelled',
         requestId: 202,
+        status: 'cancelled',
       });
       expect(sendToUserForRequest).toHaveBeenCalledWith(2, 202, {
-        event: 'request_cancelled',
+        event: 'request_auto_cancelled',
         requestId: 202,
+        status: 'cancelled',
+      });
+      expect(sendGlobalToAll).toHaveBeenCalledWith({
+        event: 'busy_now_changed',
+        userIds: [1, 3],
+        busyNow: true,
       });
     });
 
@@ -1648,12 +1721,10 @@ describe('RequestService', () => {
         sender: { id: 1, name: 'Person A', profile: {} },
         receiver: { id: 3, name: 'Person C', profile: {} },
       };
-      (prisma.request.findUnique as any)
-        .mockResolvedValueOnce(request)
-        .mockResolvedValueOnce({
-          status: RequestStatus.PENDING,
-          responseDeadlineAt: request.responseDeadlineAt,
-        });
+      (prisma.request.findUnique as any).mockResolvedValueOnce(request).mockResolvedValueOnce({
+        status: RequestStatus.PENDING,
+        responseDeadlineAt: request.responseDeadlineAt,
+      });
       (prisma.request.update as any).mockResolvedValue(accepted);
       (prisma.request.findMany as any)
         .mockResolvedValueOnce([{ id: 202, receiverId: 2 }])
@@ -1671,11 +1742,12 @@ describe('RequestService', () => {
           data: expect.objectContaining({ status: RequestStatus.CANCELLED }),
         }),
       );
-      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_updated' });
-      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_updated' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(1, { event: 'request_auto_cancelled' });
+      expect(sendGlobalToUser).toHaveBeenCalledWith(2, { event: 'request_auto_cancelled' });
       expect(sendToUserForRequest).toHaveBeenCalledWith(2, 202, {
-        event: 'request_cancelled',
+        event: 'request_auto_cancelled',
         requestId: 202,
+        status: 'cancelled',
       });
     });
 

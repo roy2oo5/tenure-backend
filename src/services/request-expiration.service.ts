@@ -2,6 +2,8 @@ import { RequestStatus } from '@prisma/client';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import { sendGlobalToUser } from './websocket.service';
+import { NotificationService } from './notification.service';
+import { restoreReadyNow } from './ready-now.service';
 
 const RETRY_DELAY_MS = 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -93,8 +95,22 @@ export async function expireConfirmedRequestsPastOtpDeadline(now = new Date()): 
       },
     });
     if (result.count === 0) continue;
-    sendGlobalToUser(request.senderId, { event: 'request_updated', requestId: request.id });
-    sendGlobalToUser(request.receiverId, { event: 'request_updated', requestId: request.id });
+    const event = { event: 'request_expired', requestId: request.id, status: 'expired' };
+    sendGlobalToUser(request.senderId, event);
+    sendGlobalToUser(request.receiverId, event);
+    await restoreReadyNow([request.senderId, request.receiverId]);
+    await Promise.allSettled([
+      NotificationService.createNotification(
+        request.senderId,
+        'meet_expired',
+        'Your support request expired because the OTP was not entered on the scheduled date.',
+      ),
+      NotificationService.createNotification(
+        request.receiverId,
+        'meet_expired',
+        'Your support request expired because the OTP was not entered on the scheduled date.',
+      ),
+    ]);
     expiredCount += 1;
   }
   return expiredCount;
@@ -107,7 +123,13 @@ export async function expireReadyNowRequests(now = new Date()): Promise<number> 
       status: RequestStatus.PENDING,
       responseDeadlineAt: { lte: now },
     },
-    select: { id: true, senderId: true, receiverId: true, responseDeadlineAt: true, quickPickGroupId: true },
+    select: {
+      id: true,
+      senderId: true,
+      receiverId: true,
+      responseDeadlineAt: true,
+      quickPickGroupId: true,
+    },
   });
   let expiredCount = 0;
   for (const request of overdue) {
@@ -127,8 +149,22 @@ export async function expireReadyNowRequests(now = new Date()): Promise<number> 
         : { status: RequestStatus.EXPIRED, otp: null },
     });
     if (result.count === 0) continue;
-    sendGlobalToUser(request.senderId, { event: 'request_updated', requestId: request.id });
-    sendGlobalToUser(request.receiverId, { event: 'request_updated', requestId: request.id });
+    const status = request.quickPickGroupId ? 'cancelled' : 'expired';
+    const event = {
+      event: request.quickPickGroupId ? 'request_auto_cancelled' : 'request_expired',
+      requestId: request.id,
+      status,
+    };
+    sendGlobalToUser(request.senderId, event);
+    sendGlobalToUser(request.receiverId, event);
+    const kind = request.quickPickGroupId ? 'meet_canceled' : 'meet_expired';
+    const message = request.quickPickGroupId
+      ? 'Your Quick Pick request was automatically cancelled because its response time elapsed.'
+      : 'Your Ready Now request expired before it was accepted.';
+    await Promise.allSettled([
+      NotificationService.createNotification(request.senderId, kind, message),
+      NotificationService.createNotification(request.receiverId, kind, message),
+    ]);
     expiredCount += 1;
   }
   return expiredCount;

@@ -502,4 +502,56 @@ describe('DiscoverService', () => {
     expect(results[0].busyToday).toBe(true);
     expect(results[0].activeSessionStatus).toBe('RUNNING');
   });
+
+  it('saves by supporter identity and returns that supporter for every offered category', async () => {
+    (prisma.savedMate.findMany as any).mockResolvedValue([{ mateUserId: 7 }]);
+    (prisma.profile.findMany as any).mockResolvedValue([
+      {
+        userId: 7,
+        fullName: 'Multi Support User',
+        profilePhoto: 'https://example.com/multi.jpg',
+        location: 'Bangalore',
+        district: 'Bangalore',
+        state: 'Karnataka',
+        gender: 'Woman',
+        dob: new Date('1998-01-01'),
+        categories: ['Hospital Support', 'Shopping Support'],
+        categoryRates: {
+          'Hospital Support': 200,
+          'Shopping Support': 150,
+        },
+        hourlyRate: 150,
+        languages: ['English'],
+        gallery: [],
+        user: {
+          tenureId: 'MS123',
+          email: 'multi@example.com',
+          phone: '9999999995',
+          isActive: true,
+        },
+      },
+    ]);
+
+    await DiscoverService.saveMate(1, 7);
+    expect(prisma.savedMate.upsert).toHaveBeenCalledWith({
+      where: { userId_mateUserId: { userId: 1, mateUserId: 7 } },
+      update: {},
+      create: { userId: 1, mateUserId: 7 },
+    });
+
+    const hospital = await DiscoverService.listSavedMates(1, {
+      category: 'Hospital Support',
+    });
+    const shopping = await DiscoverService.listSavedMates(1, {
+      category: 'Shopping Support',
+    });
+
+    expect(hospital).toHaveLength(1);
+    expect(shopping).toHaveLength(1);
+    expect(hospital[0]).toMatchObject({
+      userId: 7,
+      saved: true,
+      categories: ['Hospital Support', 'Shopping Support'],
+    });
+  });
 });

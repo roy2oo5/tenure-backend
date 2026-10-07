@@ -856,6 +856,7 @@ export class DiscoverService {
       .map((row) => profileByUserId.get(row.mateUserId))
       .filter((profile): profile is PublicProfileWithUser => Boolean(profile))
       .filter(isDiscoverableProfile)
+      .filter((profile) => profileMatchesCategory(profile.categories, input.category))
       .filter((profile) => matchesLanguages(profile, input.languages))
       .filter((profile) => matchesVehiclePreferences(profile, input));
     const activeSessionByUserId = await activeSessionStatusesForUsers(

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalCategoryLabel,
   MATE_CATEGORIES,
+  profileAcceptsSupportBasedRequests,
   profileMatchesCategory,
 } from '../../src/constants/mate-categories';
 
@@ -14,6 +15,13 @@ describe('mate category matching', () => {
   it('keeps specific support profiles scoped to their selected categories', () => {
     expect(profileMatchesCategory(['Shopping Support'], 'Shopping Support')).toBe(true);
     expect(profileMatchesCategory(['Shopping Support'], 'Hospital Support')).toBe(false);
+  });
+
+  it('identifies only profiles that selected Support Based on Request', () => {
+    expect(profileAcceptsSupportBasedRequests(['Support Based on Request'])).toBe(true);
+    expect(profileAcceptsSupportBasedRequests(['request'])).toBe(true);
+    expect(profileAcceptsSupportBasedRequests(['Open to any'])).toBe(true);
+    expect(profileAcceptsSupportBasedRequests(['Shopping Support'])).toBe(false);
   });
 
   it('recognizes Tech & Education Support and its common aliases', () => {

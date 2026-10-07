@@ -2,6 +2,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { NotificationService } from '@/services/notification.service';
 import { prisma } from '@/config/database';
 import { AppError } from '@/utils/app-error';
+import { sendGlobalToUser } from '@/services/websocket.service';
+
+vi.mock('@/services/websocket.service', () => ({
+  sendGlobalToUser: vi.fn(),
+}));
 
 vi.mock('@/config/database', () => ({
   prisma: {
@@ -39,7 +44,7 @@ describe('NotificationService', () => {
       const result = await NotificationService.createNotification(
         123,
         'request_accepted',
-        'Jane Doe accepted your request'
+        'Jane Doe accepted your request',
       );
 
       expect(prisma.notification.create).toHaveBeenCalledWith({
@@ -50,6 +55,10 @@ describe('NotificationService', () => {
         },
       });
       expect(result).toEqual(mockNotif);
+      expect(sendGlobalToUser).toHaveBeenCalledWith(123, {
+        event: 'notification_created',
+        notification: mockNotif,
+      });
     });
 
     it('should store the acting user name and Tenure ID', async () => {
@@ -100,9 +109,7 @@ describe('NotificationService', () => {
     });
 
     it('should filter notifications by payments', async () => {
-      const mockList = [
-        { id: 1003, userId: 123, kind: 'payment_sent', message: 'Sent' },
-      ];
+      const mockList = [{ id: 1003, userId: 123, kind: 'payment_sent', message: 'Sent' }];
 
       (prisma.notification.findMany as any).mockResolvedValue(mockList);
 
@@ -144,18 +151,18 @@ describe('NotificationService', () => {
     it('should throw 404 error if notification is not found', async () => {
       (prisma.notification.findUnique as any).mockResolvedValue(null);
 
-      await expect(
-        NotificationService.markAsRead(123, 1001)
-      ).rejects.toThrow(new AppError('Notification not found', 404));
+      await expect(NotificationService.markAsRead(123, 1001)).rejects.toThrow(
+        new AppError('Notification not found', 404),
+      );
     });
 
     it('should throw 403 error if user does not own notification', async () => {
       const mockNotif = { id: 1001, userId: 999, read: false };
       (prisma.notification.findUnique as any).mockResolvedValue(mockNotif);
 
-      await expect(
-        NotificationService.markAsRead(123, 1001)
-      ).rejects.toThrow(new AppError('Unauthorized', 403));
+      await expect(NotificationService.markAsRead(123, 1001)).rejects.toThrow(
+        new AppError('Unauthorized', 403),
+      );
     });
   });
 

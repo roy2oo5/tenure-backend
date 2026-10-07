@@ -40,3 +40,25 @@ describe('extra amount payment preference', () => {
     ).toBe(false);
   });
 });
+
+describe('Quick Pick radius', () => {
+  it('defaults to 50 km for clients that omit the radius', () => {
+    const parsed = createQuickPickSchema.parse({ body: quickPickBody });
+    expect(parsed.body.radiusKm).toBe(50);
+  });
+
+  it.each([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])(
+    'accepts %i km',
+    (radiusKm) => {
+      expect(createQuickPickSchema.safeParse({ body: { ...quickPickBody, radiusKm } }).success).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each([0, 15, 101, 50.5])('rejects %s km', (radiusKm) => {
+    expect(createQuickPickSchema.safeParse({ body: { ...quickPickBody, radiusKm } }).success).toBe(
+      false,
+    );
+  });
+});

@@ -141,3 +141,13 @@ export function profileMatchesCategory(
 
   return profileCategories.some((category) => variants.has(category.trim().toLowerCase()));
 }
+
+/** Whether a profile explicitly accepts custom, request-based support work. */
+export function profileAcceptsSupportBasedRequests(profileCategories: string[]): boolean {
+  const requestVariants = new Set(
+    getCategoryMatchVariants('Support Based on Request').map((value) => value.toLowerCase()),
+  );
+  return profileCategories.some((category) =>
+    requestVariants.has(category.trim().toLowerCase()),
+  );
+}

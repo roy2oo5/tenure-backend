@@ -2,10 +2,13 @@ import { prisma } from '../config/database';
 import { AppError } from '../utils/app-error';
 import { Prisma, Profile, RequestStatus, SessionStatus } from '@prisma/client';
 import { NotificationService } from './notification.service';
-import { sendToUserForRequest, sendGlobalToUser } from './websocket.service';
+import { sendToUserForRequest, sendGlobalToAll, sendGlobalToUser } from './websocket.service';
 import { randomInt, randomUUID } from 'crypto';
 import { otpProximityForRequest } from '../utils/otp-proximity';
-import { getCategoryMatchVariants, profileMatchesCategory } from '../constants/mate-categories';
+import {
+  getCategoryMatchVariants,
+  profileAcceptsSupportBasedRequests,
+} from '../constants/mate-categories';
 import { deleteExpiredMessages } from './message-retention.service';
 import { RealtimeMessageService } from './realtime-message.service';
 import {
@@ -53,6 +56,7 @@ export type QuickPickInput = {
   hourlyRate: number;
   durationMinutes: number;
   responseTime: number;
+  radiusKm?: number;
   timezoneOffsetMinutes: number;
   bookingFor?: 'self' | 'someone_else';
   beneficiaryName?: string | null;
@@ -846,6 +850,7 @@ const requestFitsAvailability = (
 export class RequestService {
   public static async createQuickPick(senderId: number, input: QuickPickInput) {
     const now = new Date();
+    const radiusKm = input.radiusKm ?? 50;
     const { start, end } = localDayBounds(now, input.timezoneOffsetMinutes);
     const bookingFor = input.bookingFor === 'someone_else' ? 'someone_else' : 'self';
     const beneficiaryName = normalizeOptionalText(input.beneficiaryName);
@@ -891,11 +896,11 @@ export class RequestService {
     const nearbyIds = profiles
       .filter(
         (profile) =>
-          profileMatchesCategory(profile.categories, input.category) &&
+          profileAcceptsSupportBasedRequests(profile.categories) &&
           profile.latitude != null &&
           profile.longitude != null &&
           distanceBetweenKm(input.latitude, input.longitude, profile.latitude, profile.longitude) <=
-            50,
+            radiusKm,
       )
       .map((profile) => profile.userId);
 
@@ -950,7 +955,10 @@ export class RequestService {
     const busyIds = new Set(existing.map((request) => request.receiverId));
     const eligibleIds = nearbyIds.filter((id) => !busyIds.has(id) && !bookedIds.has(id));
     if (!eligibleIds.length) {
-      throw new AppError('No supporter found within 50 km of your selected location.', 404);
+      throw new AppError(
+        `No supporter found within ${radiusKm} km of your selected location.`,
+        404,
+      );
     }
 
     const groupId = randomUUID();
@@ -993,7 +1001,10 @@ export class RequestService {
           select: { id: true },
         });
         if (currentSupport) {
-          throw new AppError('Book for Someone Else while your support is confirmed or running.', 409);
+          throw new AppError(
+            'Book for Someone Else while your support is confirmed or running.',
+            409,
+          );
         }
       }
       await tx.request.createMany({
@@ -1023,7 +1034,7 @@ export class RequestService {
           message: normalizeOptionalText(input.message) ?? '',
           readyToPayTravelCharges: input.readyToPayTravelCharges ?? false,
           readyToPayTip: input.readyToPayTip ?? false,
-          extraSupportAmount: input.readyToPayTip ? input.extraSupportAmount ?? null : null,
+          extraSupportAmount: input.readyToPayTip ? (input.extraSupportAmount ?? null) : null,
           needsMateVehicle: (input.neededMateVehicleTypes?.length ?? 0) > 0,
           offersRequesterVehicle: input.offeredRequesterVehicleType != null,
           neededMateVehicleTypes: input.neededMateVehicleTypes ?? [],
@@ -1075,20 +1086,18 @@ export class RequestService {
               (request) =>
                 request.status === RequestStatus.CANCELLED &&
                 request.cancellationFeeReason !== 'Response time elapsed',
-            ) &&
-            requests.every((request) => request.status !== RequestStatus.PENDING)
+            ) && requests.every((request) => request.status !== RequestStatus.PENDING)
           ? 'cancelled'
-          : requests[0].responseDeadlineAt != null &&
-              requests[0].responseDeadlineAt > new Date()
+          : requests[0].responseDeadlineAt != null && requests[0].responseDeadlineAt > new Date()
             ? 'waiting'
             : 'timed_out',
       responseDeadlineAt: requests[0].responseDeadlineAt?.toISOString() ?? null,
-      responseTimeMinutes: requests[0].responseDeadlineAt && requests[0].createdAt
-        ? Math.round(
-            (requests[0].responseDeadlineAt.getTime() - requests[0].createdAt.getTime()) /
-              60_000,
-          )
-        : null,
+      responseTimeMinutes:
+        requests[0].responseDeadlineAt && requests[0].createdAt
+          ? Math.round(
+              (requests[0].responseDeadlineAt.getTime() - requests[0].createdAt.getTime()) / 60_000,
+            )
+          : null,
       supporter: winner
         ? {
             requestId: winner.id,
@@ -1344,7 +1353,10 @@ export class RequestService {
         select: { id: true },
       });
       if (activeSupport) {
-        throw new AppError('Book for Someone Else while your support is confirmed or running.', 409);
+        throw new AppError(
+          'Book for Someone Else while your support is confirmed or running.',
+          409,
+        );
       }
     }
 
@@ -1380,10 +1392,7 @@ export class RequestService {
     }
 
     if (data.bookingFor === 'someone_else') {
-      const { start, end } = localDayBounds(
-        data.fromDateTime,
-        data.timezoneOffsetMinutes ?? 0,
-      );
+      const { start, end } = localDayBounds(data.fromDateTime, data.timezoneOffsetMinutes ?? 0);
       const confirmedCount = await prisma.request.count({
         where: {
           senderId,
@@ -1741,14 +1750,15 @@ export class RequestService {
     if (shouldExpireRequest(request)) {
       await prisma.request.update({
         where: { id: requestId },
-        data: request.quickPickGroupId && request.status === RequestStatus.PENDING
-          ? {
-              status: RequestStatus.CANCELLED,
-              cancelledAt: new Date(),
-              cancellationFeeReason: 'Response time elapsed',
-              otp: null,
-            }
-          : { status: RequestStatus.EXPIRED, otp: null },
+        data:
+          request.quickPickGroupId && request.status === RequestStatus.PENDING
+            ? {
+                status: RequestStatus.CANCELLED,
+                cancelledAt: new Date(),
+                cancellationFeeReason: 'Response time elapsed',
+                otp: null,
+              }
+            : { status: RequestStatus.EXPIRED, otp: null },
       });
       if (request.status === RequestStatus.CONFIRMED) {
         await restoreReadyNow([request.senderId, request.receiverId]);
@@ -1964,10 +1974,7 @@ export class RequestService {
                   const activeSupport = await tx.request.findFirst({
                     where: {
                       id: { not: requestId },
-                      OR: [
-                        { senderId: request.senderId },
-                        { receiverId: request.senderId },
-                      ],
+                      OR: [{ senderId: request.senderId }, { receiverId: request.senderId }],
                       status: RequestStatus.CONFIRMED,
                       AND: [activeSessionFilter],
                     },
@@ -1990,10 +1997,7 @@ export class RequestService {
                       { receiverId: request.receiverId },
                       ...(request.bookingFor === 'someone_else'
                         ? []
-                        : [
-                            { senderId: request.senderId },
-                            { receiverId: request.senderId },
-                          ]),
+                        : [{ senderId: request.senderId }, { receiverId: request.senderId }]),
                     ],
                     AND: [
                       activeSessionFilter,
@@ -2093,19 +2097,25 @@ export class RequestService {
             });
 
     if (autoCancelledNormalRequests.length) {
-      sendGlobalToUser(request.senderId, { event: 'request_updated' });
+      sendGlobalToUser(request.senderId, { event: 'request_auto_cancelled' });
       for (const receiverId of new Set(
         autoCancelledNormalRequests.map((item) => item.receiverId),
       )) {
-        sendGlobalToUser(receiverId, { event: 'request_updated' });
+        sendGlobalToUser(receiverId, { event: 'request_auto_cancelled' });
       }
       for (const cancelled of autoCancelledNormalRequests) {
         for (const participantId of [request.senderId, cancelled.receiverId]) {
           sendToUserForRequest(participantId, cancelled.id, {
-            event: 'request_cancelled',
+            event: 'request_auto_cancelled',
             requestId: cancelled.id,
+            status: 'cancelled',
           });
         }
+        void NotificationService.createNotification(
+          cancelled.receiverId,
+          'meet_canceled',
+          'This request was automatically cancelled because another support request was confirmed.',
+        ).catch((error) => console.error('Auto-cancel notification failed:', error));
       }
     }
 
@@ -2130,6 +2140,25 @@ export class RequestService {
       await suspendReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
     } else if (status === 'cancelled' && request.status === RequestStatus.CONFIRMED) {
       await restoreReadyNow([updatedRequest.senderId, updatedRequest.receiverId]);
+    }
+    if (
+      finalConfirmation ||
+      (status === 'cancelled' && request.status === RequestStatus.CONFIRMED)
+    ) {
+      sendGlobalToAll({
+        event: 'busy_now_changed',
+        userIds: [updatedRequest.senderId, updatedRequest.receiverId],
+        busyNow: finalConfirmation,
+      });
+    }
+    if (finalConfirmation) {
+      // Confirmation can cancel several same-date alternatives inside the
+      // transaction. A global invalidation ensures every affected account
+      // refreshes even when it is not a participant in the winning request.
+      sendGlobalToAll({
+        event: 'request_auto_cancelled',
+        confirmedRequestId: updatedRequest.id,
+      });
     }
     if (finalConfirmation) {
       scheduleConfirmedOtpExpiry(updatedRequest.fromDateTime, updatedRequest.timezoneOffsetMinutes);

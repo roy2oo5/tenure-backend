@@ -33,6 +33,7 @@ vi.mock('@/config/database', () => ({
 vi.mock('@/services/websocket.service', () => ({
   sendToUser: vi.fn(),
   sendGlobalToUser: vi.fn(),
+  sendGlobalToAll: vi.fn(),
 }));
 
 describe('SessionService', () => {
