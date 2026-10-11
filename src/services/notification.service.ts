@@ -1,5 +1,5 @@
 import { prisma } from '../config/database';
-import { Notification } from '@prisma/client';
+import { Notification, RequestStatus } from '@prisma/client';
 import { AppError } from '../utils/app-error';
 import { sendPushNotification } from '../config/firebase';
 import { logger } from '../utils/logger';
@@ -102,12 +102,61 @@ export class NotificationService {
       };
     }
 
-    return prisma.notification.findMany({
+    const notifications = await prisma.notification.findMany({
       where: whereClause,
       orderBy: {
         createdAt: 'desc',
       },
     });
+
+    const needsActor = notifications.filter(
+      (n) => !n.actorName && (n.kind === 'meet_expired' || n.kind === 'meet_canceled'),
+    );
+
+    if (needsActor.length > 0) {
+      try {
+        const userRequests = await prisma.request.findMany({
+          where: {
+            OR: [{ senderId: userId }, { receiverId: userId }],
+            status: { in: [RequestStatus.EXPIRED, RequestStatus.CANCELLED] },
+          },
+          include: {
+            sender: { select: { id: true, name: true, tenureId: true, profile: { select: { fullName: true } } } },
+            receiver: { select: { id: true, name: true, tenureId: true, profile: { select: { fullName: true } } } },
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
+
+        if (userRequests.length > 0) {
+          for (const n of needsActor) {
+            let bestReq = userRequests[0];
+            let minDiff = Math.abs(n.createdAt.getTime() - bestReq.updatedAt.getTime());
+            for (const req of userRequests) {
+              const diff = Math.abs(n.createdAt.getTime() - req.updatedAt.getTime());
+              if (diff < minDiff) {
+                minDiff = diff;
+                bestReq = req;
+              }
+            }
+            const partner = bestReq.senderId === userId ? bestReq.receiver : bestReq.sender;
+            if (partner) {
+              n.actorName = partner.profile?.fullName ?? partner.name ?? 'TenureMate user';
+              n.actorTenureId = partner.tenureId ?? null;
+              prisma.notification
+                .update({
+                  where: { id: n.id },
+                  data: { actorName: n.actorName, actorTenureId: n.actorTenureId },
+                })
+                .catch(() => {});
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('Error enriching notifications with actor details:', err);
+      }
+    }
+
+    return notifications;
   }
 
   /**

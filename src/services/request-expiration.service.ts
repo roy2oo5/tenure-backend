@@ -104,11 +104,13 @@ export async function expireConfirmedRequestsPastOtpDeadline(now = new Date()): 
         request.senderId,
         'meet_expired',
         'Your support request expired because the OTP was not entered on the scheduled date.',
+        request.receiverId,
       ),
       NotificationService.createNotification(
         request.receiverId,
         'meet_expired',
         'Your support request expired because the OTP was not entered on the scheduled date.',
+        request.senderId,
       ),
     ]);
     expiredCount += 1;
@@ -162,8 +164,8 @@ export async function expireReadyNowRequests(now = new Date()): Promise<number> 
       ? 'Your Quick Pick request was automatically cancelled because its response time elapsed.'
       : 'Your Ready Now request expired before it was accepted.';
     await Promise.allSettled([
-      NotificationService.createNotification(request.senderId, kind, message),
-      NotificationService.createNotification(request.receiverId, kind, message),
+      NotificationService.createNotification(request.senderId, kind, message, request.receiverId),
+      NotificationService.createNotification(request.receiverId, kind, message, request.senderId),
     ]);
     expiredCount += 1;
   }
