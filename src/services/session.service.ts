@@ -6,6 +6,8 @@ import { sendToUser, sendGlobalToAll, sendGlobalToUser } from './websocket.servi
 import { NotificationService } from './notification.service';
 import { getCategoryMatchVariants } from '../constants/mate-categories';
 import { restoreReadyNow } from './ready-now.service';
+import { sendSilentDataNotification } from '../config/firebase';
+import { UploadService } from './upload.service';
 
 // The 12-hour limit applies to one uninterrupted running period. A resumed
 // session keeps its accumulated billable time and receives a new 12-hour run.
@@ -13,6 +15,50 @@ const MAX_CONTINUOUS_SESSION_SECONDS = 12 * 60 * 60;
 const AUTO_PAUSE_RETRY_MS = 60_000;
 let autoPauseTimer: NodeJS.Timeout | null = null;
 let scheduledAutoPauseAt: number | null = null;
+
+async function purgeEndedMeetingChat(requestId: number, participantIds: number[]): Promise<void> {
+  const storedMedia = await prisma.message.findMany({
+    where: { requestId, mediaUrl: { not: null } },
+    select: { mediaUrl: true },
+  });
+  await prisma.message.deleteMany({ where: { requestId } });
+
+  const payload = { event: 'chat_cleared', requestId };
+  for (const participantId of participantIds) {
+    sendToUser(participantId, payload);
+    sendGlobalToUser(participantId, payload);
+  }
+
+  // Database deletion is authoritative. Remote media and offline-device
+  // commands are best-effort cleanup and must not restore or retain messages.
+  await Promise.allSettled(
+    storedMedia
+      .map(({ mediaUrl }) => mediaUrl)
+      .filter((mediaUrl): mediaUrl is string => Boolean(mediaUrl))
+      .map((mediaUrl) => UploadService.deleteUploadedFile(mediaUrl)),
+  );
+
+  try {
+    const participants = await prisma.user.findMany({
+      where: { id: { in: participantIds }, fcmToken: { not: null } },
+      select: { fcmToken: true },
+    });
+    await Promise.allSettled(
+      participants
+        .map(({ fcmToken }) => fcmToken)
+        .filter((token): token is string => Boolean(token))
+        .map((token) =>
+          sendSilentDataNotification(
+            token,
+            { event: 'chat_cleared', requestId: String(requestId) },
+            `chat-cleared-${requestId}`,
+          ),
+        ),
+    );
+  } catch {
+    // Online sockets and the next request refresh still clear device storage.
+  }
+}
 
 function isSameLocalCalendarDay(first: Date, second: Date, timezoneOffsetMinutes = 0): boolean {
   const offsetMs = timezoneOffsetMinutes * 60 * 1000;
@@ -644,6 +690,7 @@ export class SessionService {
     }
 
     if (session.status === SessionStatus.ENDED) {
+      await purgeEndedMeetingChat(session.requestId, [session.senderId, session.receiverId]);
       return mapSession(session, userId);
     }
 
@@ -712,6 +759,8 @@ export class SessionService {
         endReason: endReason?.trim() || session.endReason || null,
       },
     });
+
+    await purgeEndedMeetingChat(updated.requestId, [updated.senderId, updated.receiverId]);
 
     await restoreReadyNow([updated.senderId, updated.receiverId]);
     sendGlobalToAll({

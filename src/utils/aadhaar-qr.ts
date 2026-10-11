@@ -53,11 +53,16 @@ export interface ParsedAadhaarQR {
  * @throws Error if decompression fails or input is invalid
  */
 export function decompressQrPayload(compressedBytes: Buffer): Buffer {
-  if (!compressedBytes || !(compressedBytes instanceof Buffer || compressedBytes instanceof Uint8Array)) {
+  if (
+    !compressedBytes ||
+    !(compressedBytes instanceof Buffer || compressedBytes instanceof Uint8Array)
+  ) {
     throw new Error('Invalid input: compressedBytes must be a valid Buffer or Uint8Array.');
   }
 
-  const inputBuffer = Buffer.isBuffer(compressedBytes) ? compressedBytes : Buffer.from(compressedBytes);
+  const inputBuffer = Buffer.isBuffer(compressedBytes)
+    ? compressedBytes
+    : Buffer.from(compressedBytes);
 
   if (inputBuffer.length === 0) {
     throw new Error('Failed to decompress QR payload: input buffer is empty.');
@@ -120,7 +125,7 @@ export function parseAadhaarBuffer(decompressedBuffer: Buffer): ParsedAadhaarQR 
 
   if (decompressedBuffer.length <= SIGNATURE_LENGTH_BYTES) {
     throw new Error(
-      `Decompressed buffer too short (${decompressedBuffer.length} bytes). Must be greater than ${SIGNATURE_LENGTH_BYTES} bytes to contain a valid RSA signature.`
+      `Decompressed buffer too short (${decompressedBuffer.length} bytes). Must be greater than ${SIGNATURE_LENGTH_BYTES} bytes to contain a valid RSA signature.`,
     );
   }
 
@@ -128,7 +133,10 @@ export function parseAadhaarBuffer(decompressedBuffer: Buffer): ParsedAadhaarQR 
   const signature = decompressedBuffer.subarray(decompressedBuffer.length - SIGNATURE_LENGTH_BYTES);
 
   // 2. Store all preceding bytes as signedData
-  const signedData = decompressedBuffer.subarray(0, decompressedBuffer.length - SIGNATURE_LENGTH_BYTES);
+  const signedData = decompressedBuffer.subarray(
+    0,
+    decompressedBuffer.length - SIGNATURE_LENGTH_BYTES,
+  );
 
   // 3. Delimit payload fields by byte 255 (0xFF)
   // We scan for the first 16 occurrences of delimiter 255 to extract text fields (indices 0 to 15).
@@ -196,7 +204,7 @@ export function parseAadhaarBuffer(decompressedBuffer: Buffer): ParsedAadhaarQR 
 export function verifyAadhaarSignature(
   signedData: Buffer,
   signature: Buffer,
-  uidaiPublicKeyPem: string
+  uidaiPublicKeyPem: string,
 ): boolean {
   if (!signedData || !signature || !uidaiPublicKeyPem || signature.length !== 256) {
     return false;
@@ -210,7 +218,7 @@ export function verifyAadhaarSignature(
         key: uidaiPublicKeyPem,
         padding: crypto.constants.RSA_PKCS1_PADDING,
       },
-      signature
+      signature,
     );
   } catch {
     return false;
@@ -239,7 +247,7 @@ export interface DemographicMatchResult {
 
 export function matchAadhaarDemographics(
   aadhaar: AadhaarDemographics,
-  profile: { fullName: string; dob?: Date | string | null; gender?: string | null }
+  profile: { fullName: string; dob?: Date | string | null; gender?: string | null },
 ): DemographicMatchResult {
   // 1. Normalize and compare Names
   const normAadhaarName = aadhaar.name
@@ -350,6 +358,23 @@ export function getUidaiPublicKeyPem(): string | undefined {
   return undefined;
 }
 
+/** Convert UIDAI's large decimal Secure QR value back to compressed bytes. */
+export function decodeAadhaarQrText(value: string): Buffer {
+  const decimal = value.trim();
+  if (!/^\d+$/.test(decimal)) {
+    throw new Error('The image does not contain a supported Aadhaar Secure QR code.');
+  }
+
+  let hex = BigInt(decimal).toString(16);
+  if (hex.length % 2 !== 0) hex = `0${hex}`;
+  return Buffer.from(hex, 'hex');
+}
+
+function normalizeAadhaarQrPayload(value: Buffer): Buffer {
+  const text = value.toString('ascii').trim();
+  return /^\d+$/.test(text) ? decodeAadhaarQrText(text) : value;
+}
+
 /**
  * Extract raw QR payload bytes from full Aadhaar card photo (PNG / JPEG image file).
  * Uses ZXing library and image decoders to locate and scan the QR code within the card photo.
@@ -405,14 +430,15 @@ export function extractQrBytesFromImageBuffer(imageBuffer: Buffer): Buffer {
     reader.setHints(hints);
 
     const result = reader.decode(binaryBitmap);
-    if (result && result.getRawBytes() && result.getRawBytes().length > 0) {
-      return Buffer.from(result.getRawBytes());
+    if (result) {
+      return decodeAadhaarQrText(result.getText());
     }
-  } catch {
-    // If ZXing fails to decode image, return original imageBuffer for zlib fallback
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not scan the signed Aadhaar QR from the image. ${detail}`);
   }
 
-  return imageBuffer;
+  throw new Error('Could not scan the signed Aadhaar QR from the image.');
 }
 
 /**
@@ -424,11 +450,11 @@ export function extractQrBytesFromImageBuffer(imageBuffer: Buffer): Buffer {
  */
 export function processAadhaarSecureQR(
   rawQrBytes: Buffer,
-  uidaiPublicKeyPem?: string
+  uidaiPublicKeyPem?: string,
 ): ProcessAadhaarResult {
   try {
     // Step 0: Extract raw QR payload bytes from image file (PNG/JPEG photo of Aadhaar Card) if applicable
-    const targetPayloadBytes = extractQrBytesFromImageBuffer(rawQrBytes);
+    const targetPayloadBytes = normalizeAadhaarQrPayload(extractQrBytesFromImageBuffer(rawQrBytes));
 
     // Step 1: Decompress raw QR byte stream
     const decompressedBuffer = decompressQrPayload(targetPayloadBytes);
@@ -437,25 +463,28 @@ export function processAadhaarSecureQR(
     const parsed = parseAadhaarBuffer(decompressedBuffer);
 
     // Determine target public key / certificate (explicit > env > uidai_auth_prod_2028.cer)
-    const effectiveKey = (uidaiPublicKeyPem && uidaiPublicKeyPem.trim().length > 0)
-      ? uidaiPublicKeyPem
-      : getUidaiPublicKeyPem();
+    const effectiveKey =
+      uidaiPublicKeyPem && uidaiPublicKeyPem.trim().length > 0
+        ? uidaiPublicKeyPem
+        : getUidaiPublicKeyPem();
 
-    // Step 3: Verify RSA Digital Signature if public key is supplied / loaded
-    if (effectiveKey && effectiveKey.trim().length > 0) {
-      const isValidSig = verifyAadhaarSignature(
-        parsed.signedData,
-        parsed.signature,
-        effectiveKey
-      );
+    if (!effectiveKey || effectiveKey.trim().length === 0) {
+      return {
+        isValid: false,
+        data: parsed.demographics,
+        error: 'UIDAI signature certificate is not configured.',
+      };
+    }
 
-      if (!isValidSig) {
-        return {
-          isValid: false,
-          data: parsed.demographics,
-          error: 'Digital signature verification failed: signature does not match public key.',
-        };
-      }
+    // Step 3: Verification must never succeed without checking UIDAI's signature.
+    const isValidSig = verifyAadhaarSignature(parsed.signedData, parsed.signature, effectiveKey);
+
+    if (!isValidSig) {
+      return {
+        isValid: false,
+        data: parsed.demographics,
+        error: 'Digital signature verification failed: signature does not match public key.',
+      };
     }
 
     return {

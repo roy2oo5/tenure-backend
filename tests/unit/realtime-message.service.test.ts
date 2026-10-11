@@ -1,13 +1,16 @@
 import { WebSocket } from 'ws';
 import { prisma } from '@/config/database';
-import {
-  activeUserConnections,
-  RealtimeMessageService,
-} from '@/services/realtime-message.service';
+import { activeUserConnections, RealtimeMessageService } from '@/services/realtime-message.service';
 
 vi.mock('@/config/database', () => ({
   prisma: {
-    message: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    message: {
+      upsert: vi.fn(),
+      findUnique: vi.fn(),
+      update: vi.fn(),
+      deleteMany: vi.fn(),
+    },
+    session: { findUnique: vi.fn() },
     undeliveredMessage: {
       upsert: vi.fn(),
       findUnique: vi.fn(),
@@ -27,12 +30,19 @@ vi.mock('@/services/message-retention.service', () => ({
   scheduleMessageExpiration: vi.fn(),
 }));
 
-const socket = (): WebSocket => ({
-  readyState: WebSocket.OPEN,
-  send: vi.fn(),
-}) as unknown as WebSocket;
+const socket = (): WebSocket =>
+  ({
+    readyState: WebSocket.OPEN,
+    send: vi.fn(),
+  }) as unknown as WebSocket;
 
 describe('RealtimeMessageService', () => {
+  beforeEach(() => {
+    (prisma.session.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'RUNNING',
+    });
+  });
+
   afterEach(() => {
     activeUserConnections.clear();
     vi.clearAllMocks();
@@ -93,6 +103,62 @@ describe('RealtimeMessageService', () => {
     });
   });
 
+  it('does not store messages after the meeting has ended', async () => {
+    (prisma.session.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'ENDED',
+    });
+
+    await expect(
+      RealtimeMessageService.handleSendMessage(10, 7, socket(), {
+        event: 'send_message',
+        messageId: '11111111-1111-4111-8111-111111111111',
+        chatRoomId: '7',
+        recipientId: '20',
+        type: 'text',
+        text: 'too late',
+        createdAt: Date.now(),
+      }),
+    ).rejects.toThrow('meeting has ended');
+    expect(prisma.message.upsert).not.toHaveBeenCalled();
+  });
+
+  it('removes a message when the meeting ends during insertion', async () => {
+    const createdAt = new Date();
+    (prisma.session.findUnique as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ status: 'RUNNING' })
+      .mockResolvedValueOnce({ status: 'ENDED' });
+    (prisma.message.upsert as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 1,
+      clientMessageId: '11111111-1111-4111-8111-111111111111',
+      requestId: 7,
+      senderId: 10,
+      receiverId: 20,
+      content: 'racing message',
+      type: 'text',
+      mediaUrl: null,
+      voiceDuration: null,
+      createdAt,
+      expiresAt: new Date(Date.now() + 1000),
+      isDeleted: false,
+    });
+
+    await expect(
+      RealtimeMessageService.handleSendMessage(10, 7, socket(), {
+        event: 'send_message',
+        messageId: '11111111-1111-4111-8111-111111111111',
+        chatRoomId: '7',
+        recipientId: '20',
+        type: 'text',
+        text: 'racing message',
+        createdAt: createdAt.getTime(),
+      }),
+    ).rejects.toThrow('meeting has ended');
+    expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+      where: { requestId: 7 },
+    });
+    expect(prisma.undeliveredMessage.upsert).not.toHaveBeenCalled();
+  });
+
   it('rejects delete-for-everyone after 48 hours', async () => {
     (prisma.message.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: 1,
@@ -103,10 +169,12 @@ describe('RealtimeMessageService', () => {
       createdAt: new Date(Date.now() - 49 * 60 * 60 * 1000),
     });
 
-    await expect(RealtimeMessageService.handleDeleteForEveryone(10, {
-      event: 'delete_for_everyone',
-      messageId: 'message-1',
-      chatRoomId: '7',
-    })).rejects.toThrow('Messages can only be deleted within 48 hours');
+    await expect(
+      RealtimeMessageService.handleDeleteForEveryone(10, {
+        event: 'delete_for_everyone',
+        messageId: 'message-1',
+        chatRoomId: '7',
+      }),
+    ).rejects.toThrow('Messages can only be deleted within 48 hours');
   });
 });

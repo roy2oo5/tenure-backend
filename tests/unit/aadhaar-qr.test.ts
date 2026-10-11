@@ -7,6 +7,7 @@ import {
   verifyAadhaarSignature,
   processAadhaarSecureQR,
   matchAadhaarDemographics,
+  decodeAadhaarQrText,
   AadhaarDemographics,
 } from '../../src/utils/aadhaar-qr';
 
@@ -15,7 +16,7 @@ describe('Aadhaar Secure QR Code Utility Module', () => {
   function buildMockDecompressedBuffer(
     demographicsArray: string[],
     photoBuffer: Buffer,
-    signatureBuffer: Buffer
+    signatureBuffer: Buffer,
   ): Buffer {
     const delimiter = Buffer.from([255]);
     const fieldBuffers: Buffer[] = [];
@@ -60,6 +61,21 @@ describe('Aadhaar Secure QR Code Utility Module', () => {
 
   const mockPhotoBytes = Buffer.from([0x00, 0xff, 0x4f, 0xff, 0x51, 0x12, 0x34]);
 
+  describe('decodeAadhaarQrText', () => {
+    it('converts the decimal QR representation back to compressed bytes', () => {
+      const compressed = Buffer.from('789cabcd0123', 'hex');
+      const decimal = BigInt(`0x${compressed.toString('hex')}`).toString(10);
+
+      expect(decodeAadhaarQrText(decimal)).toEqual(compressed);
+    });
+
+    it('rejects non-numeric QR content', () => {
+      expect(() => decodeAadhaarQrText('not-an-aadhaar-qr')).toThrowError(
+        /supported Aadhaar Secure QR/i,
+      );
+    });
+  });
+
   describe('decompressQrPayload', () => {
     it('should decompress a valid zlib DEFLATE payload', () => {
       const originalText = Buffer.from('Hello Aadhaar QR Test Payload Data');
@@ -95,7 +111,7 @@ describe('Aadhaar Secure QR Code Utility Module', () => {
       const decompressed = buildMockDecompressedBuffer(
         mockDemographicsList,
         mockPhotoBytes,
-        dummySignature
+        dummySignature,
       );
 
       const result = parseAadhaarBuffer(decompressed);

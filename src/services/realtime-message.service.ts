@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, SessionStatus } from '@prisma/client';
 import { WebSocket } from 'ws';
 import { prisma } from '../config/database';
 import { sendPushNotification, sendSilentDataNotification } from '../config/firebase';
@@ -73,7 +73,22 @@ export class RealtimeMessageService {
     if (activeUserConnections.get(key) === socket) activeUserConnections.delete(key);
   }
 
-  public static async deliverPending(userId: number, chatRoomId: string, socket: WebSocket): Promise<void> {
+  public static async deliverPending(
+    userId: number,
+    chatRoomId: string,
+    socket: WebSocket,
+  ): Promise<void> {
+    const requestId = Number(chatRoomId);
+    const session = Number.isInteger(requestId)
+      ? await prisma.session.findUnique({
+          where: { requestId },
+          select: { status: true },
+        })
+      : null;
+    if (session?.status === SessionStatus.ENDED) {
+      await prisma.message.deleteMany({ where: { requestId } });
+      return;
+    }
     const pending = await prisma.undeliveredMessage.findMany({
       where: { recipientId: userId, chatRoomId },
       orderBy: { createdAt: 'asc' },
@@ -95,9 +110,18 @@ export class RealtimeMessageService {
     if (!Number.isInteger(recipientId)) throw new AppError('Invalid recipient', 400);
     const text = input.text?.trim() ?? '';
     if (input.type === 'text' && !text) throw new AppError('Message text is required', 400);
-    if (input.viewOnce && input.type !== 'image') throw new AppError('Only images can be view-once media', 400);
+    if (input.viewOnce && input.type !== 'image')
+      throw new AppError('Only images can be view-once media', 400);
     if (input.viewOnce && !input.mediaUrl) throw new AppError('View-once image is required', 400);
     const expiresAt = input.viewOnce ? new Date(Date.now() + 60 * 60 * 1000) : undefined;
+
+    const sessionBeforeInsert = await prisma.session.findUnique({
+      where: { requestId },
+      select: { status: true },
+    });
+    if (sessionBeforeInsert?.status === SessionStatus.ENDED) {
+      throw new AppError('Chat is closed because this meeting has ended', 409);
+    }
 
     const message = await prisma.message.upsert({
       where: { clientMessageId: input.messageId },
@@ -115,8 +139,24 @@ export class RealtimeMessageService {
       },
       update: {},
     });
-    if (message.senderId !== senderId || message.receiverId !== recipientId || message.requestId !== requestId) {
+    if (
+      message.senderId !== senderId ||
+      message.receiverId !== recipientId ||
+      message.requestId !== requestId
+    ) {
       throw new AppError('Message ID is already in use', 409);
+    }
+
+    // Close the race where the meeting ends between the first status check and
+    // this insert. Finalization also deletes all messages, so either ordering
+    // leaves the room empty.
+    const sessionAfterInsert = await prisma.session.findUnique({
+      where: { requestId },
+      select: { status: true },
+    });
+    if (sessionAfterInsert?.status === SessionStatus.ENDED) {
+      await prisma.message.deleteMany({ where: { requestId } });
+      throw new AppError('Chat is closed because this meeting has ended', 409);
     }
     scheduleMessageExpiration(message.expiresAt);
 
@@ -155,20 +195,29 @@ export class RealtimeMessageService {
         select: { fcmToken: true },
       });
       if (recipient?.fcmToken) {
-        await sendPushNotification(recipient.fcmToken, 'New message', routed.text ?? 'New attachment', {
-          kind: 'chat_message',
-          requestId: input.chatRoomId,
-          messageId: input.messageId,
-        });
+        await sendPushNotification(
+          recipient.fcmToken,
+          'New message',
+          routed.text ?? 'New attachment',
+          {
+            kind: 'chat_message',
+            requestId: input.chatRoomId,
+            messageId: input.messageId,
+          },
+        );
       }
     }
     sendJson(socket, { event: 'sent_confirm', message: { ...routed, sender: 'me' } });
   }
 
   public static async handleMessageAck(recipientId: number, input: MessageAckInput): Promise<void> {
-    const queued = await prisma.undeliveredMessage.findUnique({ where: { messageId: input.messageId } });
+    const queued = await prisma.undeliveredMessage.findUnique({
+      where: { messageId: input.messageId },
+    });
     if (!queued || queued.recipientId !== recipientId) return;
-    const message = await prisma.message.findUnique({ where: { clientMessageId: input.messageId } });
+    const message = await prisma.message.findUnique({
+      where: { clientMessageId: input.messageId },
+    });
     if (message?.type === 'voice' && message.mediaUrl) {
       await UploadService.deleteUploadedFile(message.mediaUrl);
       await prisma.message.update({
@@ -177,24 +226,47 @@ export class RealtimeMessageService {
       });
     }
     await prisma.undeliveredMessage.delete({ where: { messageId: input.messageId } });
-    const senderSocket = activeUserConnections.get(recipientKey(queued.senderId, queued.chatRoomId));
-    if (senderSocket) sendJson(senderSocket, { event: 'delivered_confirm', messageId: input.messageId });
+    const senderSocket = activeUserConnections.get(
+      recipientKey(queued.senderId, queued.chatRoomId),
+    );
+    if (senderSocket)
+      sendJson(senderSocket, { event: 'delivered_confirm', messageId: input.messageId });
   }
 
-  public static async handleOpenViewOnce(recipientId: number, input: OpenViewOnceInput): Promise<void> {
-    const message = await prisma.message.findUnique({ where: { clientMessageId: input.messageId } });
-    if (!message || String(message.requestId) !== input.chatRoomId) throw new AppError('Photo not found', 404);
-    if (!message.viewOnce || message.type !== 'image') throw new AppError('This is not a view-once photo', 400);
-    if (message.receiverId !== recipientId) throw new AppError('Only the recipient can open this photo', 403);
-    if (message.openedAt || message.isDeleted || message.expiresAt <= new Date()) throw new AppError('This view-once photo has expired', 410);
+  public static async handleOpenViewOnce(
+    recipientId: number,
+    input: OpenViewOnceInput,
+  ): Promise<void> {
+    const message = await prisma.message.findUnique({
+      where: { clientMessageId: input.messageId },
+    });
+    if (!message || String(message.requestId) !== input.chatRoomId)
+      throw new AppError('Photo not found', 404);
+    if (!message.viewOnce || message.type !== 'image')
+      throw new AppError('This is not a view-once photo', 400);
+    if (message.receiverId !== recipientId)
+      throw new AppError('Only the recipient can open this photo', 403);
+    if (message.openedAt || message.isDeleted || message.expiresAt <= new Date())
+      throw new AppError('This view-once photo has expired', 410);
     const consumed = await prisma.message.updateMany({
       where: { id: message.id, openedAt: null, isDeleted: false, expiresAt: { gt: new Date() } },
-      data: { openedAt: new Date(), content: 'View-once photo opened', mediaUrl: null, isDeleted: true, deletedAt: new Date() },
+      data: {
+        openedAt: new Date(),
+        content: 'View-once photo opened',
+        mediaUrl: null,
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
     });
     if (consumed.count !== 1) throw new AppError('This view-once photo has expired', 410);
     if (message.mediaUrl) await UploadService.deleteUploadedFile(message.mediaUrl);
-    const control = { event: 'message_control_event', control: { event: 'view_once_opened', messageId: message.clientMessageId } };
-    const senderSocket = activeUserConnections.get(recipientKey(message.senderId, input.chatRoomId));
+    const control = {
+      event: 'message_control_event',
+      control: { event: 'view_once_opened', messageId: message.clientMessageId },
+    };
+    const senderSocket = activeUserConnections.get(
+      recipientKey(message.senderId, input.chatRoomId),
+    );
     if (senderSocket) sendJson(senderSocket, control);
   }
 
@@ -202,16 +274,25 @@ export class RealtimeMessageService {
     requesterId: number,
     input: DeleteMessageInput,
   ): Promise<void> {
-    const message = await prisma.message.findUnique({ where: { clientMessageId: input.messageId } });
-    if (!message || String(message.requestId) !== input.chatRoomId) throw new AppError('Message not found', 404);
-    if (message.senderId !== requesterId) throw new AppError('Only the original sender can delete this message', 403);
+    const message = await prisma.message.findUnique({
+      where: { clientMessageId: input.messageId },
+    });
+    if (!message || String(message.requestId) !== input.chatRoomId)
+      throw new AppError('Message not found', 404);
+    if (message.senderId !== requesterId)
+      throw new AppError('Only the original sender can delete this message', 403);
     if (Date.now() - message.createdAt.getTime() > 48 * 60 * 60 * 1000) {
       throw new AppError('Messages can only be deleted within 48 hours', 400);
     }
 
     await prisma.message.update({
       where: { id: message.id },
-      data: { content: 'This message was deleted', mediaUrl: null, isDeleted: true, deletedAt: new Date() },
+      data: {
+        content: 'This message was deleted',
+        mediaUrl: null,
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
     });
     const control = {
       event: 'message_control_event',
@@ -229,7 +310,9 @@ export class RealtimeMessageService {
       update: { payload: control },
     });
 
-    const recipientSocket = activeUserConnections.get(recipientKey(message.receiverId, input.chatRoomId));
+    const recipientSocket = activeUserConnections.get(
+      recipientKey(message.receiverId, input.chatRoomId),
+    );
     if (recipientSocket?.readyState === WebSocket.OPEN) {
       sendJson(recipientSocket, control);
     } else {
@@ -240,7 +323,11 @@ export class RealtimeMessageService {
       if (recipient?.fcmToken) {
         await sendSilentDataNotification(
           recipient.fcmToken,
-          { kind: 'message_control_event', event: 'delete_message', messageId: message.clientMessageId },
+          {
+            kind: 'message_control_event',
+            event: 'delete_message',
+            messageId: message.clientMessageId,
+          },
           `delete-${message.clientMessageId}`,
         );
       }

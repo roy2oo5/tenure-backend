@@ -19,6 +19,11 @@ vi.mock('@/config/database', () => ({
     },
     user: {
       findUnique: vi.fn(),
+      findMany: vi.fn(),
+    },
+    message: {
+      findMany: vi.fn(),
+      deleteMany: vi.fn(),
     },
     profile: {
       findFirst: vi.fn(),
@@ -28,6 +33,14 @@ vi.mock('@/config/database', () => ({
       create: vi.fn(),
     },
   },
+}));
+
+vi.mock('@/config/firebase', () => ({
+  sendSilentDataNotification: vi.fn(),
+}));
+
+vi.mock('@/services/upload.service', () => ({
+  UploadService: { deleteUploadedFile: vi.fn() },
 }));
 
 vi.mock('@/services/websocket.service', () => ({
@@ -44,6 +57,9 @@ describe('SessionService', () => {
 
   beforeEach(() => {
     (prisma.profile.updateMany as any).mockResolvedValue({ count: 0 });
+    (prisma.message.findMany as any).mockResolvedValue([]);
+    (prisma.message.deleteMany as any).mockResolvedValue({ count: 0 });
+    (prisma.user.findMany as any).mockResolvedValue([]);
   });
 
   const mockRequest = {
@@ -478,6 +494,9 @@ describe('SessionService', () => {
       expect(result.lastActionBy).toBeNull();
       expect(result.elapsedSec).toBeGreaterThanOrEqual(3600);
       expect(result.billingAmount).toBeCloseTo(50.0, 1);
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+        where: { requestId: 101 },
+      });
     });
 
     it('adds the selected extra-support amount to billing at the fixed request rate', async () => {

@@ -94,3 +94,14 @@ export const aadhaarCredentialUploadMiddleware = multer({
   },
   limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+export const aadhaarQrImageUploadMiddleware = multer({
+  storage,
+  fileFilter: (_req, file, cb) => {
+    if (!['image/jpeg', 'image/png'].includes(file.mimetype)) {
+      return cb(new AppError('A JPEG or PNG Aadhaar image is expected.', 400) as any, false);
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});

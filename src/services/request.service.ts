@@ -2329,6 +2329,17 @@ export class RequestService {
       throw new AppError('Chat is available after both users confirm the request', 403);
     }
 
+    const session = await prisma.session.findUnique({
+      where: { requestId },
+      select: { status: true },
+    });
+    if (session?.status === SessionStatus.ENDED) {
+      // Self-heal records created by older deployments and never expose ended
+      // meeting chat history again.
+      await prisma.message.deleteMany({ where: { requestId } });
+      return [];
+    }
+
     await deleteExpiredMessages();
     const limit = Math.min(Math.max(pagination.limit ?? 30, 1), 100);
     const before = pagination.before ? new Date(pagination.before) : null;

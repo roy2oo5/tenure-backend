@@ -20,7 +20,10 @@ import {
   savedMateParamsSchema,
 } from '../validations/discover.validation';
 import { Role } from '@prisma/client';
-import { aadhaarCredentialUploadMiddleware } from '../middlewares/upload.middleware';
+import {
+  aadhaarCredentialUploadMiddleware,
+  aadhaarQrImageUploadMiddleware,
+} from '../middlewares/upload.middleware';
 
 const router = Router();
 
@@ -473,6 +476,12 @@ router.delete(
   '/saved-addresses/:addressId',
   protect,
   ProfileController.deleteSavedAddress,
+);
+router.post(
+  '/profile/aadhaar-qr-verification',
+  protect,
+  aadhaarQrImageUploadMiddleware.single('qrImage'),
+  ProfileController.verifyAadhaarQR,
 );
 router.post(
   '/profile/aadhaar-shared-credential',

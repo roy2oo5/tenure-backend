@@ -1,7 +1,7 @@
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { scheduleMessageExpiration } from './message-retention.service';
 import { WebSocketServer, WebSocket } from 'ws';
-import { CallStatus, RequestStatus } from '@prisma/client';
+import { CallStatus, RequestStatus, SessionStatus } from '@prisma/client';
 import { randomInt, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import url from 'url';
@@ -265,6 +265,17 @@ export function initWebSocket(server: HttpServer) {
         return;
       }
 
+      const meetSession = await prisma.session.findUnique({
+        where: { requestId },
+        select: { status: true },
+      });
+      if (meetSession?.status === SessionStatus.ENDED) {
+        await prisma.message.deleteMany({ where: { requestId } });
+        ws.send(JSON.stringify({ event: 'chat_cleared', requestId }));
+        ws.close(4003, 'Meeting ended');
+        return;
+      }
+
       // Verify block relation
       const block = await prisma.block.findFirst({
         where: {
@@ -357,11 +368,13 @@ export function initWebSocket(server: HttpServer) {
               await RealtimeMessageService.handleOpenViewOnce(userId, data as OpenViewOnceInput);
               ws.send(JSON.stringify({ event: 'view_once_opened', messageId: data.messageId }));
             } catch (error: unknown) {
-              ws.send(JSON.stringify({
-                event: 'view_once_open_failed',
-                messageId: data.messageId,
-                error: error instanceof Error ? error.message : 'Photo could not be opened',
-              }));
+              ws.send(
+                JSON.stringify({
+                  event: 'view_once_open_failed',
+                  messageId: data.messageId,
+                  error: error instanceof Error ? error.message : 'Photo could not be opened',
+                }),
+              );
             }
             return;
           }
@@ -490,6 +503,16 @@ export function initWebSocket(server: HttpServer) {
           const receiverId =
             meetRequest.senderId === userId ? meetRequest.receiverId : meetRequest.senderId;
 
+          const sessionBeforeLegacyInsert = await prisma.session.findUnique({
+            where: { requestId },
+            select: { status: true },
+          });
+          if (sessionBeforeLegacyInsert?.status === SessionStatus.ENDED) {
+            await prisma.message.deleteMany({ where: { requestId } });
+            ws.send(JSON.stringify({ event: 'chat_cleared', requestId }));
+            return;
+          }
+
           // Save to database
           const message = await prisma.message.create({
             data: {
@@ -502,6 +525,15 @@ export function initWebSocket(server: HttpServer) {
               voiceDuration: voiceDuration ? parseInt(voiceDuration, 10) : null,
             },
           });
+          const sessionAfterLegacyInsert = await prisma.session.findUnique({
+            where: { requestId },
+            select: { status: true },
+          });
+          if (sessionAfterLegacyInsert?.status === SessionStatus.ENDED) {
+            await prisma.message.deleteMany({ where: { requestId } });
+            ws.send(JSON.stringify({ event: 'chat_cleared', requestId }));
+            return;
+          }
           scheduleMessageExpiration(message.expiresAt);
 
           const formattedMessage = {

@@ -31,6 +31,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+COPY uidai_auth_prod_2028.cer ./uidai_auth_prod_2028.cer
 
 RUN mkdir -p public/uploads && chown -R node:node /app
 
