@@ -394,4 +394,40 @@ describe('ProfileService', () => {
       expect(result).toEqual(mockResponse);
     });
   });
+
+  describe('storeAadhaarImageDetails', () => {
+    it('stores OCR fields without marking Aadhaar as verified', async () => {
+      const existing = {
+        id: 2001,
+        userId: 123,
+        fullName: 'Vikas',
+        aadhaarVerified: false,
+      };
+      (prisma.profile.findUnique as any).mockResolvedValue(existing);
+      (prisma.profile.update as any).mockResolvedValue(existing);
+
+      const result = await ProfileService.storeAadhaarImageDetails(123, {
+        name: 'Vikas',
+        dob: '1999-01-27',
+        gender: 'Male',
+        maskedAadhaar: 'XXXX XXXX 0391',
+      });
+
+      expect(prisma.profile.update).toHaveBeenCalledWith({
+        where: { userId: 123 },
+        data: {
+          aadhaarImageDetails: expect.objectContaining({
+            name: 'Vikas',
+            dob: '1999-01-27',
+            gender: 'Male',
+            maskedAadhaar: 'XXXX XXXX 0391',
+            source: 'digilocker_image_ocr',
+            verified: false,
+            scannedAt: expect.any(String),
+          }),
+        },
+      });
+      expect(result.details.verified).toBe(false);
+    });
+  });
 });

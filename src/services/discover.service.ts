@@ -8,6 +8,7 @@ import {
 import { AppError } from '../utils/app-error';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { ProfileRatingAggregate, ratingsForProfiles } from './profile-rating.service';
 
 export type DiscoverSearchInput = {
   q?: string;
@@ -41,6 +42,7 @@ export type DiscoverMateResult = {
   hourlyRate: number | null;
   rating: number;
   ratingCount: number;
+  ratingByGender: ProfileRatingAggregate['byGender'];
   categoryRates: Record<string, number>;
   languages: string[];
   vehicles: string[];
@@ -461,7 +463,7 @@ function toDiscoverMate(
   input: DiscoverSearchInput = {},
   savedMateIds = new Set<number>(),
   activeSessionByUserId = new Map<number, SessionStatus>(),
-  ratingBySupporterId = new Map<number, { average: number; count: number }>(),
+  ratingBySupporterId = new Map<number, ProfileRatingAggregate>(),
 ): DiscoverMateResult {
   const category = canonicalCategoryLabel(displayCategory(profile, input.category));
   const categories = [...new Set(profile.categories.map(canonicalCategoryLabel))];
@@ -472,7 +474,11 @@ function toDiscoverMate(
     Boolean(profile.livePhotoUrl?.trim()) ||
     gallery.some((uri) => uri.toLowerCase().includes('live-photo'));
   const activeSessionStatus = activeSessionByUserId.get(profile.userId) ?? null;
-  const rating = ratingBySupporterId.get(profile.userId) ?? { average: 0, count: 0 };
+  const rating = ratingBySupporterId.get(profile.userId) ?? {
+    average: 0,
+    count: 0,
+    byGender: { all: null, male: null, female: null, other: null },
+  };
   return {
     userId: profile.userId,
     tenureId: profile.user?.tenureId ?? 'Not assigned',
@@ -489,6 +495,7 @@ function toDiscoverMate(
     hourlyRate: rateForCategory(profile, category),
     rating: rating.average,
     ratingCount: rating.count,
+    ratingByGender: rating.byGender,
     categoryRates: canonicalCategoryRatesRecord(profile.categoryRates),
     languages: profile.languages ?? [],
     vehicles: profile.vehicles ?? [],
@@ -532,28 +539,6 @@ function toDiscoverMate(
     activeSessionStatus,
     scheduledMeets: [],
   };
-}
-
-async function ratingsForSupporters(
-  supporterIds: number[],
-): Promise<Map<number, { average: number; count: number }>> {
-  if (!supporterIds.length) return new Map();
-  // Unit-test database doubles created before rating aggregation do not expose
-  // Prisma's groupBy method. Real Prisma clients always do; returning an empty
-  // aggregate keeps those older callers compatible without affecting runtime.
-  if (typeof prisma.session.groupBy !== 'function') return new Map();
-  const rows = await prisma.session.groupBy({
-    by: ['receiverId'],
-    where: { receiverId: { in: supporterIds }, senderRating: { not: null } },
-    _avg: { senderRating: true },
-    _count: { senderRating: true },
-  });
-  return new Map(
-    rows.map((row) => [
-      row.receiverId,
-      { average: row._avg.senderRating ?? 0, count: row._count.senderRating },
-    ]),
-  );
 }
 
 async function savedMateIdsForUser(userId: number): Promise<Set<number>> {
@@ -669,7 +654,7 @@ export class DiscoverService {
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
-    const ratingBySupporterId = await ratingsForSupporters(
+    const ratingBySupporterId = await ratingsForProfiles(
       filteredProfiles.map((profile) => profile.userId),
     );
 
@@ -728,7 +713,7 @@ export class DiscoverService {
 
     const savedMateIds = await savedMateIdsForUser(currentUserId);
     const activeSessionByUserId = await activeSessionStatusesForUsers([targetUserId]);
-    const ratingBySupporterId = await ratingsForSupporters([targetUserId]);
+    const ratingBySupporterId = await ratingsForProfiles([targetUserId]);
     const result = toDiscoverMate(
       profile,
       {},
@@ -812,7 +797,7 @@ export class DiscoverService {
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
-    const ratingBySupporterId = await ratingsForSupporters(
+    const ratingBySupporterId = await ratingsForProfiles(
       filteredProfiles.map((profile) => profile.userId),
     );
 
@@ -862,7 +847,7 @@ export class DiscoverService {
     const activeSessionByUserId = await activeSessionStatusesForUsers(
       filteredProfiles.map((profile) => profile.userId),
     );
-    const ratingBySupporterId = await ratingsForSupporters(
+    const ratingBySupporterId = await ratingsForProfiles(
       filteredProfiles.map((profile) => profile.userId),
     );
 

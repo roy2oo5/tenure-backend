@@ -147,3 +147,24 @@ export const verifyAadhaarSchema = z.object({
     dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format'),
   }),
 });
+
+const optionalImageDetail = (max: number) =>
+  z.string().trim().max(max).nullable().optional();
+
+export const storeAadhaarImageDetailsSchema = z.object({
+  body: z
+    .object({
+      name: optionalImageDetail(100),
+      dob: optionalImageDetail(32),
+      gender: optionalImageDetail(32),
+      maskedAadhaar: optionalImageDetail(32),
+      address: optionalImageDetail(500),
+    })
+    .refine(
+      (details) =>
+        Object.values(details).some(
+          (value) => typeof value === 'string' && value.length > 0,
+        ),
+      { message: 'At least one Aadhaar image detail is required.' },
+    ),
+});

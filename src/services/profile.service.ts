@@ -70,6 +70,14 @@ export type ProfileUpsertInput = {
   defaultUpiId?: string | null;
 };
 
+export type AadhaarImageDetailsInput = {
+  name?: string | null;
+  dob?: string | null;
+  gender?: string | null;
+  maskedAadhaar?: string | null;
+  address?: string | null;
+};
+
 function normalizeTimeRange(value?: string | null): string | null {
   if (!value) {
     return null;
@@ -463,6 +471,37 @@ export class ProfileService {
       isValidSignature: true,
       matchType: match.matchType,
       message: match.message,
+    };
+  }
+
+  public static async storeAadhaarImageDetails(
+    userId: number,
+    input: AadhaarImageDetailsInput,
+  ): Promise<{ profile: Profile; details: Prisma.JsonObject; message: string }> {
+    const existing = await prisma.profile.findUnique({ where: { userId } });
+    if (!existing) {
+      throw new AppError('Profile not found for this user.', 404);
+    }
+    const details: Prisma.JsonObject = {
+      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+      ...(input.dob?.trim() ? { dob: input.dob.trim() } : {}),
+      ...(input.gender?.trim() ? { gender: input.gender.trim() } : {}),
+      ...(input.maskedAadhaar?.trim()
+        ? { maskedAadhaar: input.maskedAadhaar.trim() }
+        : {}),
+      ...(input.address?.trim() ? { address: input.address.trim() } : {}),
+      scannedAt: new Date().toISOString(),
+      source: 'digilocker_image_ocr',
+      verified: false,
+    };
+    const profile = await prisma.profile.update({
+      where: { userId },
+      data: { aadhaarImageDetails: details },
+    });
+    return {
+      profile,
+      details,
+      message: 'Aadhaar details read from the DigiLocker image were saved.',
     };
   }
 

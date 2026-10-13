@@ -13,7 +13,10 @@ import {
   refreshSessionSchema,
   phoneAuthSchema,
 } from '../validations/user.validation';
-import { createProfileSchema } from '../validations/profile.validation';
+import {
+  createProfileSchema,
+  storeAadhaarImageDetailsSchema,
+} from '../validations/profile.validation';
 import {
   discoverSearchSchema,
   mateProfileParamsSchema,
@@ -482,6 +485,12 @@ router.post(
   protect,
   aadhaarQrImageUploadMiddleware.single('qrImage'),
   ProfileController.verifyAadhaarQR,
+);
+router.post(
+  '/profile/aadhaar-image-details',
+  protect,
+  validate(storeAadhaarImageDetailsSchema),
+  ProfileController.storeAadhaarImageDetails,
 );
 router.post(
   '/profile/aadhaar-shared-credential',

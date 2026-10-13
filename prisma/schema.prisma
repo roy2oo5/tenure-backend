@@ -93,6 +93,7 @@ model Profile {
   aadhaarMasked          String?   @map("aadhaar_masked")
   aadhaarName            String?   @map("aadhaar_name")
   aadhaarAddress         String?   @map("aadhaar_address")
+  aadhaarImageDetails    Json?     @map("aadhaar_image_details")
   gallery                String[]  @default([])
   livePhotoUrl           String?   @map("live_photo_url")
   instagram              String?

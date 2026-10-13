@@ -4,6 +4,7 @@ import { AppError } from '../utils/app-error';
 import { prisma } from '../config/database';
 import { processAadhaarCredentialZip } from '../utils/aadhaar-credential';
 import { notifyNearbySupportersChanged } from '../services/websocket.service';
+import { ratingsForProfile } from '../services/profile-rating.service';
 
 function parseAadhaarDob(value: string): Date | undefined {
   const parts = value.trim().split(/[-/]/);
@@ -32,10 +33,13 @@ function normalizedGender(value: string | null): string {
 }
 
 async function profileWithTenureId(userId: number, profile: object) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { tenureId: true, email: true, phone: true },
-  });
+  const [user, rating] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { tenureId: true, email: true, phone: true },
+    }),
+    ratingsForProfile(userId),
+  ]);
   const profileData = profile as { gallery?: unknown };
   const gallery = Array.isArray(profileData.gallery) ? profileData.gallery : [];
   const explicitLivePhoto = (profileData as { livePhotoUrl?: unknown }).livePhotoUrl;
@@ -50,6 +54,9 @@ async function profileWithTenureId(userId: number, profile: object) {
     phoneAdded: Boolean(user?.phone?.trim()),
     emailAdded: Boolean(user?.email?.trim()),
     livePhotoAdded,
+    rating: rating.average,
+    ratingCount: rating.count,
+    ratingByGender: rating.byGender,
   };
 }
 
@@ -431,6 +438,23 @@ export class ProfileController {
         status: 'success',
         data: result,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  public static async storeAadhaarImageDetails(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.user) return next(new AppError('You are not authenticated.', 401));
+      const result = await ProfileService.storeAadhaarImageDetails(
+        req.user.id,
+        req.body,
+      );
+      res.status(200).json({ status: 'success', data: result });
     } catch (error) {
       next(error);
     }
