@@ -94,13 +94,14 @@ export class RequestController {
         return next(new AppError('You are not authenticated.', 401));
       }
       const id = parseInt(req.params.id, 10);
-      const { status, cancellationReason, hourlyRate } = req.body;
+      const { status, cancellationReason, hourlyRate, supporterTravelMode } = req.body;
       const request = await RequestService.updateRequestStatus(
         req.user.id,
         id,
         status,
         cancellationReason,
         hourlyRate,
+        supporterTravelMode,
       );
       res.status(200).json({
         status: 'success',

@@ -140,7 +140,11 @@ export const createQuickPickSchema = z.object({
     readyToPayTravelCharges: z.boolean().optional().default(false),
     readyToPayTip: z.boolean().optional().default(false),
     extraSupportAmount: z.number().positive().max(100000).optional().nullable(),
-    neededMateVehicleTypes: z.array(z.enum(['two_wheeler', 'four_wheeler'])).max(2).optional().default([]),
+    neededMateVehicleTypes: z
+      .array(z.enum(['two_wheeler', 'four_wheeler']))
+      .max(2)
+      .optional()
+      .default([]),
     offeredRequesterVehicleType: z.enum(['two_wheeler', 'four_wheeler']).optional().nullable(),
     category: z.string().trim().min(1).max(100),
     meetLocation: z.string().trim().min(1).max(300),
@@ -156,7 +160,7 @@ export const createQuickPickSchema = z.object({
     responseTime: z
       .number()
       .int()
-      .refine((value) => [5, 8, 10, 12, 15, 20].includes(value)),
+      .refine((value) => [1, 2, 3, 4, 5, 8, 10, 12, 15, 20].includes(value)),
     radiusKm: z
       .number()
       .int()
@@ -177,5 +181,6 @@ export const updateRequestStatusSchema = z.object({
       .max(240, 'Cancellation reason must be 240 characters or less')
       .optional(),
     hourlyRate: z.number().positive().max(100000).optional(),
+    supporterTravelMode: z.enum(['car', 'bike', 'walking', 'public_transport']).optional(),
   }),
 });

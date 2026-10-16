@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createQuickPickSchema, createRequestSchema } from '../../src/validations/request.validation';
+import {
+  createQuickPickSchema,
+  createRequestSchema,
+  updateRequestStatusSchema,
+} from '../../src/validations/request.validation';
 
 const requestBody = {
   receiverId: 1,
@@ -47,18 +51,47 @@ describe('Quick Pick radius', () => {
     expect(parsed.body.radiusKm).toBe(50);
   });
 
-  it.each([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])(
-    'accepts %i km',
-    (radiusKm) => {
-      expect(createQuickPickSchema.safeParse({ body: { ...quickPickBody, radiusKm } }).success).toBe(
-        true,
-      );
-    },
-  );
+  it.each([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])('accepts %i km', (radiusKm) => {
+    expect(createQuickPickSchema.safeParse({ body: { ...quickPickBody, radiusKm } }).success).toBe(
+      true,
+    );
+  });
 
   it.each([0, 15, 101, 50.5])('rejects %s km', (radiusKm) => {
     expect(createQuickPickSchema.safeParse({ body: { ...quickPickBody, radiusKm } }).success).toBe(
       false,
     );
+  });
+});
+
+describe('Quick Pick response time', () => {
+  it.each([1, 2, 3, 4, 5, 8, 10, 12, 15, 20])('accepts %i minute(s)', (responseTime) => {
+    expect(
+      createQuickPickSchema.safeParse({ body: { ...quickPickBody, responseTime } }).success,
+    ).toBe(true);
+  });
+
+  it.each([0, 6, 21, 1.5])('rejects %s minute(s)', (responseTime) => {
+    expect(
+      createQuickPickSchema.safeParse({ body: { ...quickPickBody, responseTime } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('supporter travel mode', () => {
+  it.each(['car', 'bike', 'walking', 'public_transport'])('accepts %s', (supporterTravelMode) => {
+    expect(
+      updateRequestStatusSchema.safeParse({
+        body: { status: 'confirmed', supporterTravelMode },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an unknown mode', () => {
+    expect(
+      updateRequestStatusSchema.safeParse({
+        body: { status: 'confirmed', supporterTravelMode: 'plane' },
+      }).success,
+    ).toBe(false);
   });
 });

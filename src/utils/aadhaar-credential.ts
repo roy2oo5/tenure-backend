@@ -111,6 +111,33 @@ export function extractJwtFromAadhaarZip(zipBuffer: Buffer): string {
   return extractSdJwtFromAadhaarZip(zipBuffer).token;
 }
 
+export function extractJwtFromAadhaarText(textBuffer: Buffer): string {
+  const credential = extractSdJwtFromText(textBuffer.toString('utf8'));
+  if (!credential) {
+    throw new AppError('The Aadhaar sdjwt.txt does not contain a supported signed JWT.', 400);
+  }
+  return credential.token;
+}
+
+function extractSdJwtFromText(rawText: string): ExtractedSdJwt | undefined {
+  const text = rawText.replace(/^\uFEFF/, '').replace(/\0/g, '').trim();
+  const token = compactJwsFromText(text);
+  if (!token) return undefined;
+
+  const disclosures: ExtractedSdJwt['disclosures'] = [];
+  for (const encoded of text.split('~').slice(1).filter(Boolean)) {
+    try {
+      const disclosure = JSON.parse(decodeBase64Url(encoded.trim()).toString('utf8')) as unknown;
+      if (Array.isArray(disclosure) && disclosure.length >= 3 && typeof disclosure[1] === 'string') {
+        disclosures.push({ encoded: encoded.trim(), name: disclosure[1], value: disclosure[2] });
+      }
+    } catch {
+      // Ignore a key-binding token or malformed non-disclosure suffix.
+    }
+  }
+  return { token, disclosures };
+}
+
 function extractSdJwtFromAadhaarZip(zipBuffer: Buffer): ExtractedSdJwt {
   let zip: AdmZip;
   try {
@@ -138,22 +165,8 @@ function extractSdJwtFromAadhaarZip(zipBuffer: Buffer): ExtractedSdJwt {
     } catch {
       throw new AppError('The Aadhaar ZIP could not be extracted.', 400);
     }
-    const text = contents.toString('utf8').replace(/^\uFEFF/, '').replace(/\0/g, '').trim();
-    const token = compactJwsFromText(text);
-    if (token) {
-      const disclosures: ExtractedSdJwt['disclosures'] = [];
-      for (const encoded of text.split('~').slice(1).filter(Boolean)) {
-        try {
-          const disclosure = JSON.parse(decodeBase64Url(encoded.trim()).toString('utf8')) as unknown;
-          if (Array.isArray(disclosure) && disclosure.length >= 3 && typeof disclosure[1] === 'string') {
-            disclosures.push({ encoded: encoded.trim(), name: disclosure[1], value: disclosure[2] });
-          }
-        } catch {
-          // Ignore a key-binding token or malformed non-disclosure suffix.
-        }
-      }
-      return { token, disclosures };
-    }
+    const credential = extractSdJwtFromText(contents.toString('utf8'));
+    if (credential) return credential;
   }
   throw new AppError(
     textFileFound
@@ -206,9 +219,21 @@ async function getUidaiCredentialPublicKey(header: JwtHeader): Promise<string> {
 
 export async function processAadhaarCredentialZip(zipBuffer: Buffer): Promise<AadhaarCredentialClaims> {
   if (!zipBuffer.length || zipBuffer.length > 10 * 1024 * 1024) {
-    throw new AppError('The shared Aadhaar ZIP is empty or too large.', 400);
+    throw new AppError('The shared Aadhaar credential is empty or too large.', 400);
   }
-  const credential = extractSdJwtFromAadhaarZip(zipBuffer);
+  const hasZipSignature = zipBuffer.length >= 4 &&
+    zipBuffer[0] === 0x50 && zipBuffer[1] === 0x4b &&
+    [0x03, 0x05, 0x07].includes(zipBuffer[2]) &&
+    [0x04, 0x06, 0x08].includes(zipBuffer[3]);
+  const credential = hasZipSignature
+    ? extractSdJwtFromAadhaarZip(zipBuffer)
+    : (() => {
+      const extracted = extractSdJwtFromText(zipBuffer.toString('utf8'));
+      if (!extracted) {
+        throw new AppError('The Aadhaar sdjwt.txt does not contain a supported signed JWT.', 400);
+      }
+      return extracted;
+    })();
   const token = credential.token;
 
   const decoded = jwt.decode(token, { complete: true });

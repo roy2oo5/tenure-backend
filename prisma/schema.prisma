@@ -164,6 +164,7 @@ model Request {
   offersRequesterVehicle    Boolean       @default(false) @map("offers_requester_vehicle")
   neededMateVehicleTypes    String[]      @default([]) @map("needed_mate_vehicle_types")
   offeredRequesterVehicleType String?     @map("offered_requester_vehicle_type")
+  supporterTravelMode       String?       @map("supporter_travel_mode")
   quotedHourlyRate          Float?        @map("quoted_hourly_rate")
   scheduledReminderSentAt   DateTime?     @map("scheduled_reminder_sent_at")
   status                    RequestStatus @default(PENDING)

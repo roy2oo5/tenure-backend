@@ -262,6 +262,35 @@ describe('RequestService', () => {
       });
     });
 
+    it('uses the selected response time as the automatic cancellation deadline', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2027-06-20T10:00:00.000Z'));
+      (prisma.profile.findMany as any).mockResolvedValue([
+        {
+          userId: 2,
+          latitude: 12.972,
+          longitude: 77.595,
+          categories: ['Support Based on Request'],
+        },
+      ]);
+      (prisma.request.findMany as any)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 201, receiverId: 2 }]);
+      (prisma.request.createMany as any).mockResolvedValue({ count: 1 });
+
+      const result = await RequestService.createQuickPick(1, {
+        ...input,
+        responseTime: 1,
+      });
+
+      const deadline = new Date('2027-06-20T10:01:00.000Z');
+      expect(result.responseDeadlineAt).toBe(deadline.toISOString());
+      expect(prisma.request.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ responseDeadlineAt: deadline })],
+      });
+    });
+
     it('dispatches only to supporters within a selected 10 km radius', async () => {
       (prisma.profile.findMany as any).mockResolvedValue([
         {
@@ -1479,6 +1508,7 @@ describe('RequestService', () => {
       const mockUpdated = {
         ...mockRequest,
         status: RequestStatus.ACCEPTED_BY_RECEIVER,
+        supporterTravelMode: 'car',
         otp: null,
         createdAt: new Date(),
         sender: {
@@ -1504,13 +1534,21 @@ describe('RequestService', () => {
       (prisma.request.findUnique as any).mockResolvedValue(mockRequest);
       (prisma.request.update as any).mockResolvedValue(mockUpdated);
 
-      const result = await RequestService.updateRequestStatus(2, 101, 'confirmed');
+      const result = await RequestService.updateRequestStatus(
+        2,
+        101,
+        'confirmed',
+        undefined,
+        undefined,
+        'car',
+      );
 
       expect(prisma.request.update).toHaveBeenCalledWith({
         where: { id: 101 },
         data: {
           status: RequestStatus.ACCEPTED_BY_RECEIVER,
           otp: null,
+          supporterTravelMode: 'car',
         },
         include: {
           sender: { include: { profile: true } },
@@ -1521,6 +1559,23 @@ describe('RequestService', () => {
       expect(result.direction).toBe('received');
       expect(result.mateUserId).toBe(1);
       expect(result.mateName).toBe('Sender Profile');
+      expect(result.supporterTravelMode).toBe('car');
+    });
+
+    it('requires the supporter to select a travel mode before accepting', async () => {
+      (prisma.request.findUnique as any).mockResolvedValue({
+        id: 101,
+        senderId: 1,
+        receiverId: 2,
+        status: RequestStatus.PENDING,
+        instantBooking: true,
+        quotedHourlyRate: 275,
+      });
+
+      await expect(RequestService.updateRequestStatus(2, 101, 'confirmed')).rejects.toThrow(
+        'Select how you are coming before accepting',
+      );
+      expect(prisma.request.update).not.toHaveBeenCalled();
     });
 
     it('should generate otp when sender gives final confirmation', async () => {
@@ -1757,7 +1812,7 @@ describe('RequestService', () => {
         .mockResolvedValueOnce([{ id: 202, receiverId: 2 }])
         .mockResolvedValueOnce([]);
 
-      await RequestService.updateRequestStatus(3, 101, 'confirmed');
+      await RequestService.updateRequestStatus(3, 101, 'confirmed', undefined, undefined, 'bike');
 
       expect(prisma.request.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({

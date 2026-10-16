@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import AdmZip from 'adm-zip';
-import { extractJwtFromAadhaarZip } from '../../src/utils/aadhaar-credential';
+import {
+  extractJwtFromAadhaarText,
+  extractJwtFromAadhaarZip,
+} from '../../src/utils/aadhaar-credential';
 
 describe('Aadhaar shared credential ZIP', () => {
   const token = 'eyJhbGciOiJSUzI1NiJ9.eyJuYW1lIjoiVGVzdCBVc2VyIn0.c2lnbmF0dXJl';
@@ -22,5 +25,10 @@ describe('Aadhaar shared credential ZIP', () => {
     const zip = new AdmZip();
     zip.addFile('sdjwt.txt', Buffer.from(`${token}~${disclosure}~`));
     expect(extractJwtFromAadhaarZip(zip.toBuffer())).toBe(token);
+  });
+
+  it('extracts the issuer JWT when the Aadhaar app shares sdjwt.txt directly', () => {
+    const disclosure = Buffer.from(JSON.stringify(['salt', 'ResidentName', 'Test User'])).toString('base64url');
+    expect(extractJwtFromAadhaarText(Buffer.from(`${token}~${disclosure}~`))).toBe(token);
   });
 });

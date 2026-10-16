@@ -71,14 +71,17 @@ export class ProfileController {
       const uploadedFiles = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
       const credentialFile = req.file ?? uploadedFiles?.credential?.[0] ?? uploadedFiles?.CREDENTIAL?.[0];
       if (!credentialFile?.buffer) {
-        return next(new AppError('A ZIP file from the myAadhaar app is expected.', 400));
+        return next(new AppError('A ZIP or sdjwt.txt file from the Aadhaar app is expected.', 400));
       }
       const hasZipSignature = credentialFile.buffer.length >= 4 &&
         credentialFile.buffer[0] === 0x50 && credentialFile.buffer[1] === 0x4b &&
         [0x03, 0x05, 0x07].includes(credentialFile.buffer[2]) &&
         [0x04, 0x06, 0x08].includes(credentialFile.buffer[3]);
-      if (!credentialFile.originalname.toLowerCase().endsWith('.zip') || !hasZipSignature) {
-        return next(new AppError('A ZIP file from the myAadhaar app is expected.', 400));
+      const lowerName = credentialFile.originalname.toLowerCase();
+      const isZip = lowerName.endsWith('.zip') && hasZipSignature;
+      const isSdJwtText = lowerName.endsWith('sdjwt.txt');
+      if (!isZip && !isSdJwtText) {
+        return next(new AppError('A ZIP or sdjwt.txt file from the Aadhaar app is expected.', 400));
       }
       const profile = await prisma.profile.findUnique({ where: { userId: req.user.id } });
       if (!profile) return next(new AppError('Complete your profile before Aadhaar verification.', 404));

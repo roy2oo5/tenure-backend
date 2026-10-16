@@ -118,6 +118,7 @@ export type MappedRequest = {
   offersRequesterVehicle: boolean;
   neededMateVehicleTypes: string[];
   offeredRequesterVehicleType: string | null;
+  supporterTravelMode: string | null;
   requestHourlyRate: number | null;
   mateGender?: string | null;
   mateDob?: string | null;
@@ -1555,6 +1556,7 @@ export class RequestService {
       neededMateVehicleTypes: newRequest.neededMateVehicleTypes,
       offeredRequesterVehicleType: newRequest.offeredRequesterVehicleType,
       requestHourlyRate: newRequest.quotedHourlyRate,
+      supporterTravelMode: newRequest.supporterTravelMode,
       ...profileFields(receiver),
       status: 'pending' as const,
       sentAt: formatSentAt(newRequest.createdAt),
@@ -1664,6 +1666,7 @@ export class RequestService {
         offersRequesterVehicle: req.offersRequesterVehicle,
         neededMateVehicleTypes: req.neededMateVehicleTypes,
         offeredRequesterVehicleType: req.offeredRequesterVehicleType,
+        supporterTravelMode: req.supporterTravelMode,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.receiver),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
@@ -1707,6 +1710,7 @@ export class RequestService {
         offersRequesterVehicle: req.offersRequesterVehicle,
         neededMateVehicleTypes: req.neededMateVehicleTypes,
         offeredRequesterVehicleType: req.offeredRequesterVehicleType,
+        supporterTravelMode: req.supporterTravelMode,
         requestHourlyRate: req.quotedHourlyRate,
         ...profileFields(req.sender),
         status: mapRequestStatusWithSession(effectiveRequestStatus(req), req.session),
@@ -1734,6 +1738,7 @@ export class RequestService {
     status: 'confirmed' | 'declined' | 'cancelled',
     cancellationReason?: string | null,
     hourlyRate?: number | null,
+    supporterTravelMode?: string | null,
   ): Promise<MappedRequest> {
     const request = await prisma.request.findUnique({
       where: { id: requestId },
@@ -1834,6 +1839,12 @@ export class RequestService {
           ) {
             throw new AppError('Enter a valid hourly rate before accepting', 400);
           }
+          if (
+            !supporterTravelMode ||
+            !['car', 'bike', 'walking', 'public_transport'].includes(supporterTravelMode)
+          ) {
+            throw new AppError('Select how you are coming before accepting', 400);
+          }
         } else if (request.status === RequestStatus.ACCEPTED_BY_RECEIVER) {
           if (request.senderId !== userId) {
             throw new AppError('Only the requester can give final confirmation', 403);
@@ -1875,6 +1886,9 @@ export class RequestService {
       request.status === RequestStatus.PENDING &&
       request.quotedHourlyRate == null
         ? { quotedHourlyRate: hourlyRate }
+        : {}),
+      ...(status === 'confirmed' && request.status === RequestStatus.PENDING
+        ? { supporterTravelMode }
         : {}),
       ...(status === 'cancelled' || status === 'declined'
         ? {
@@ -2239,6 +2253,7 @@ export class RequestService {
       offersRequesterVehicle: updatedRequest.offersRequesterVehicle,
       neededMateVehicleTypes: updatedRequest.neededMateVehicleTypes,
       offeredRequesterVehicleType: updatedRequest.offeredRequesterVehicleType,
+      supporterTravelMode: updatedRequest.supporterTravelMode,
       requestHourlyRate: updatedRequest.quotedHourlyRate,
       ...profileFields(partner),
       status: mapStatusToFrontend(updatedRequest.status),

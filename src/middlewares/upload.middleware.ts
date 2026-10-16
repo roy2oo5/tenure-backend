@@ -82,13 +82,25 @@ export const genericUploadMiddleware = multer({
 export const aadhaarCredentialUploadMiddleware = multer({
   storage,
   fileFilter: (_req, file, cb) => {
+    const lowerName = file.originalname.toLowerCase();
     const isZip =
-      file.originalname.toLowerCase().endsWith('.zip') &&
+      lowerName.endsWith('.zip') &&
       ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'].includes(
         file.mimetype,
       );
-    if (!isZip) {
-      return cb(new AppError('A ZIP file from the myAadhaar app is expected.', 400) as any, false);
+    const isSdJwtText =
+      lowerName.endsWith('sdjwt.txt') &&
+      [
+        'text/plain',
+        'application/octet-stream',
+        'application/zip',
+        'application/x-zip-compressed',
+      ].includes(file.mimetype);
+    if (!isZip && !isSdJwtText) {
+      return cb(
+        new AppError('A ZIP or sdjwt.txt file from the Aadhaar app is expected.', 400) as any,
+        false,
+      );
     }
     cb(null, true);
   },
